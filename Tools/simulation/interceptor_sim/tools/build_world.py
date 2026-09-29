@@ -2,20 +2,16 @@
 """
 Generate the Gazebo world used by the interceptor simulation.
 
-Terrain: elevation (DEM) + ortho photo of "McMillan Airfield" from Gazebo Fuel
-(OpenRobotics, CC-BY 4.0). Its dry, rolling terrain is a good stand-in for the
-Central Anatolian steppe; only the geographic origin is moved to Ankara.
+Ground: flat, textured with the ortho photo of "McMillan Airfield" from
+Gazebo Fuel (OpenRobotics, CC-BY 4.0). Its dry steppe look is a good stand-in
+for Central Anatolia; only the geographic origin is moved to Ankara.
 
-The Fuel model is a DEM <heightmap>, which Gazebo Harmonic neither renders
-(headless) nor collides with (dartsim), and it squeezes the 5.8 x 7.1 km area
-into a 5.7 km square. So the photo is put on a textured triangle mesh in true
-metres instead (models/terrain_mcmillan, git-ignored because of the
-downloaded photo).
-
-By default the ground is flat (FLAT_TERRAIN): only the photo is used and the
-collision is an infinite plane at z = 0. With FLAT_TERRAIN = False the DEM
-relief is used for the mesh and its collision, with the runway strip
-flattened so that runway take-offs do not bounce on the 25-30 m DEM grid.
+The Fuel model itself is a DEM <heightmap>, which Gazebo Harmonic neither
+renders (headless) nor collides with (dartsim), and it squeezes the
+5.8 x 7.1 km area into a 5.7 km square. So the photo is put on a flat quad in
+true metres instead (models/terrain_mcmillan, git-ignored because of the
+downloaded photo); the collision is an infinite plane at z = 0. The DEM is
+only read for its geographic bounds.
 
 The world magnetic field is computed from PX4's own WMM tables for the chosen
 location, otherwise the simulated magnetometer disagrees with what PX4
@@ -36,6 +32,8 @@ import zipfile
 import numpy as np
 from PIL import Image
 
+Image.MAX_IMAGE_PIXELS = None  # the ortho photo is 5000 x 4995
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SIM_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 PX4_DIR = os.path.abspath(os.path.join(SIM_DIR, "..", "..", ".."))
@@ -54,10 +52,7 @@ TERRAIN_MODEL = "terrain_mcmillan"
 
 # runway thresholds in ortho photo pixels (measured on mcmillan_color.png)
 RUNWAY_PX = [(1950, 2778), (2875, 3123)]   # NW, SE
-RUNWAY_WIDTH = 40.0     # [m] flattened strip
-RUNWAY_BLEND = 40.0     # [m] transition to the natural terrain
 SPAWN_FROM_THRESHOLD = 60.0  # [m] target spawn point, from the NW threshold towards SE
-FLAT_TERRAIN = True     # ignore the DEM relief, flat ground with the photo only
 
 
 def fetch_terrain():
@@ -97,66 +92,26 @@ def wmm(lat, lon):
 	return dec, inc, tot
 
 
-def bilinear(grid, r, c):
-	r = np.clip(r, 0, grid.shape[0] - 1.001)
-	c = np.clip(c, 0, grid.shape[1] - 1.001)
-	r0, c0 = int(r), int(c)
-	fr, fc = r - r0, c - c0
-	return ((grid[r0, c0] * (1 - fc) + grid[r0, c0 + 1] * fc) * (1 - fr)
-		+ (grid[r0 + 1, c0] * (1 - fc) + grid[r0 + 1, c0 + 1] * fc) * fr)
-
-
 def build_terrain(dem_path, tex_path):
-	"""Textured OBJ terrain in world metres, origin at the runway centre. Returns spawn pose."""
+	"""Flat textured ground in world metres, origin at the runway centre. Returns spawn pose."""
 	im = Image.open(dem_path)
-	dem = np.asarray(im, dtype=np.float64)
-	rows, cols = dem.shape
+	cols, rows = im.size
 	tex_w, tex_h = Image.open(tex_path).size
 
-	# GeoTIFF: ModelTiepoint (top-left lon/lat) + ModelPixelScale (deg/pixel)
-	lon_tl, lat_tl = im.tag_v2[33922][3], im.tag_v2[33922][4]
+	# GeoTIFF: ModelTiepoint (top-left lon/lat) + ModelPixelScale (deg/pixel);
+	# the photo covers the same bounds as the DEM
+	lat_tl = im.tag_v2[33922][4]
 	s_lon, s_lat = im.tag_v2[33550][0], im.tag_v2[33550][1]
 	lat_mid = lat_tl - s_lat * rows / 2
-	m_lon = s_lon * 111320.0 * math.cos(math.radians(lat_mid))  # metres per pixel east
-	m_lat = s_lat * 110574.0                                    # metres per pixel north
+	width = cols * s_lon * 111320.0 * math.cos(math.radians(lat_mid))  # [m] east-west
+	height = rows * s_lat * 110574.0                                  # [m] north-south
 
-	# pixel (continuous, edge based) -> metres east/north of the top-left corner
-	to_en = lambda r, c: (c * m_lon, -r * m_lat)
-
-	# runway in DEM pixel coordinates (the photo covers the same bounds as the DEM)
-	rw = [(py / tex_h * rows, px / tex_w * cols) for px, py in RUNWAY_PX]
-	rw_en = np.array([to_en(r, c) for r, c in rw])
-	origin_en = rw_en.mean(axis=0)
-	rw_h = [bilinear(dem, r - 0.5, c - 0.5) for r, c in rw]  # vertices sit at pixel centres
-	origin_h = 0.5 * (rw_h[0] + rw_h[1])
-
-	# vertices at pixel centres
-	rr, cc = np.meshgrid(np.arange(rows) + 0.5, np.arange(cols) + 0.5, indexing="ij")
-	x = cc * m_lon - origin_en[0]
-	y = -rr * m_lat - origin_en[1]
-	z = dem - origin_h
-
-	# flatten the runway strip to a straight slope between its thresholds
-	a, b = rw_en[0] - origin_en, rw_en[1] - origin_en
-	ab = b - a
-	t = np.clip(((x - a[0]) * ab[0] + (y - a[1]) * ab[1]) / (ab @ ab), 0, 1)
-	d = np.hypot(x - (a[0] + t * ab[0]), y - (a[1] + t * ab[1]))
-	w = np.clip(1 - (d - RUNWAY_WIDTH / 2) / RUNWAY_BLEND, 0, 1)
-	w = w * w * (3 - 2 * w)  # smoothstep
-	z_rw = (rw_h[0] + t * (rw_h[1] - rw_h[0])) - origin_h
-	z = w * z_rw + (1 - w) * z
-
-	if FLAT_TERRAIN:
-		z = np.zeros_like(z)
-		rw_h = [origin_h, origin_h]
-
-	# normals
-	gy, gx = np.gradient(z, -m_lat, m_lon)
-	n = np.dstack([-gx, -gy, np.ones_like(z)])
-	n /= np.linalg.norm(n, axis=2, keepdims=True)
-
-	u = cc / cols
-	v = 1.0 - rr / rows  # OBJ texture origin is bottom-left
+	# photo pixel -> metres east/north of the top-left corner
+	to_en = lambda px, py: np.array([px / tex_w * width, -py / tex_h * height])
+	rw = [to_en(px, py) for px, py in RUNWAY_PX]
+	origin = 0.5 * (rw[0] + rw[1])
+	x0, x1 = -origin[0], width - origin[0]
+	y0, y1 = -height - origin[1], -origin[1]
 
 	model_dir = os.path.join(SIM_DIR, "models", TERRAIN_MODEL)
 	mesh_dir = os.path.join(model_dir, "meshes")
@@ -166,18 +121,22 @@ def build_terrain(dem_path, tex_path):
 	with open(os.path.join(mesh_dir, "terrain.mtl"), "w") as f:
 		f.write("newmtl terrain\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nNs 1\nillum 1\nmap_Kd terrain.png\n")
 
-	idx = np.arange(rows * cols).reshape(rows, cols) + 1  # OBJ is 1-based
-	q = np.stack([idx[:-1, :-1], idx[1:, :-1], idx[1:, 1:], idx[:-1, 1:]], axis=-1).reshape(-1, 4)
-
 	with open(os.path.join(mesh_dir, "terrain.obj"), "w") as f:
-		f.write("# generated by build_world.py from McMillan Airfield (OpenRobotics, CC-BY 4.0)\n")
-		f.write("mtllib terrain.mtl\nusemtl terrain\n")
-		np.savetxt(f, np.column_stack([x.ravel(), y.ravel(), z.ravel()]), fmt="v %.2f %.2f %.2f")
-		np.savetxt(f, np.column_stack([u.ravel(), v.ravel()]), fmt="vt %.6f %.6f")
-		np.savetxt(f, n.reshape(-1, 3), fmt="vn %.4f %.4f %.4f")
-		# counter-clockwise seen from above: row grows southwards
-		tris = np.concatenate([q[:, [0, 1, 2]], q[:, [0, 2, 3]]])
-		np.savetxt(f, np.repeat(tris, 3, axis=1), fmt="f %d/%d/%d %d/%d/%d %d/%d/%d")
+		f.write(f"""# generated by build_world.py from McMillan Airfield (OpenRobotics, CC-BY 4.0)
+mtllib terrain.mtl
+usemtl terrain
+v {x0:.2f} {y0:.2f} 0
+v {x1:.2f} {y0:.2f} 0
+v {x1:.2f} {y1:.2f} 0
+v {x0:.2f} {y1:.2f} 0
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+vn 0 0 1
+f 1/1/1 2/2/1 3/3/1
+f 1/1/1 3/3/1 4/4/1
+""")
 
 	with open(os.path.join(model_dir, "model.config"), "w") as f:
 		f.write(f"""<?xml version="1.0"?>
@@ -185,14 +144,9 @@ def build_terrain(dem_path, tex_path):
   <name>{TERRAIN_MODEL}</name>
   <version>1.0</version>
   <sdf version="1.9">model.sdf</sdf>
-  <description>McMillan Airfield terrain mesh generated from the OpenRobotics Fuel model (CC-BY 4.0)</description>
+  <description>McMillan Airfield ortho photo on flat ground, from the OpenRobotics Fuel model (CC-BY 4.0)</description>
 </model>
 """)
-
-	if FLAT_TERRAIN:
-		collision = "<plane><normal>0 0 1</normal><size>1 1</size></plane>"
-	else:
-		collision = f"<mesh><uri>model://{TERRAIN_MODEL}/meshes/terrain.obj</uri></mesh>"
 
 	with open(os.path.join(model_dir, "model.sdf"), "w") as f:
 		f.write(f"""<?xml version="1.0"?>
@@ -202,7 +156,7 @@ def build_terrain(dem_path, tex_path):
     <static>true</static>
     <link name="link">
       <collision name="collision">
-        <geometry>{collision}</geometry>
+        <geometry><plane><normal>0 0 1</normal><size>1 1</size></plane></geometry>
         <surface><friction><ode><mu>0.6</mu><mu2>0.6</mu2></ode></friction></surface>
       </collision>
       <visual name="visual">
@@ -214,16 +168,12 @@ def build_terrain(dem_path, tex_path):
 </sdf>
 """)
 
+	ab = rw[1] - rw[0]
 	yaw = math.atan2(ab[1], ab[0])
-	spawn = a + ab / np.linalg.norm(ab) * SPAWN_FROM_THRESHOLD
-	extent = (x.max() - x.min(), y.max() - y.min())
-	print(f"terrain {extent[0]:.0f} x {extent[1]:.0f} m, z {z.min():.0f}..{z.max():.0f} m, "
-	      f"runway {np.linalg.norm(ab):.0f} m, heading {90 - math.degrees(yaw):.1f} deg true")
-	return spawn[0], spawn[1], z_rw_at(rw_h, origin_h, SPAWN_FROM_THRESHOLD / np.linalg.norm(ab)), yaw
-
-
-def z_rw_at(rw_h, origin_h, t):
-	return rw_h[0] + t * (rw_h[1] - rw_h[0]) - origin_h
+	spawn = rw[0] - origin + ab / np.linalg.norm(ab) * SPAWN_FROM_THRESHOLD
+	print(f"ground {width:.0f} x {height:.0f} m, runway {np.linalg.norm(ab):.0f} m, "
+	      f"heading {90 - math.degrees(yaw):.1f} deg true")
+	return spawn[0], spawn[1], 0.0, yaw
 
 
 def main():
