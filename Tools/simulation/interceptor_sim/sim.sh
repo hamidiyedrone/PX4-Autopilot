@@ -4,7 +4,9 @@
 # SITL instance to the interceptor, which is flown from the ground station.
 # The target has no PX4: tools/target_sim.py moves it along a square circuit and
 # publishes its position at 2 Hz (HTTP JSON http://localhost:8000/target, and
-# ADS-B through the interceptor PX4 to QGroundControl).
+# ADS-B through the interceptor PX4 to QGroundControl). tools/ground_relay.py plays the
+# ground station: it polls that JSON and sends it to the interceptor as FOLLOW_TARGET
+# (uORB follow_target).
 #
 # The interceptor nose camera is streamed as H.264 (udp 5600) and shown in its own
 # window (tools/view.sh; QGroundControl's video source must stay disabled).
@@ -20,6 +22,7 @@
 #   WORLD             Gazebo world name (default: ankara, see tools/build_world.py)
 #   TARGET_AUTO       0: do not start tools/target_sim.py (the target stays on the runway)
 #   TARGET_ARGS       arguments for tools/target_sim.py, e.g. "--alt 60 --speed 18"
+#   RELAY             0: do not start tools/ground_relay.py (no FOLLOW_TARGET to the interceptor)
 #   TARGET_POSE       x,y,z,roll,pitch,yaw of the target spawn. The model origin is its
 #                     CG, 0.12 m above the belly. Default: worlds/<WORLD>.env, else 0,0,0.15,0,0,0
 #   HEADLESS          1: no Gazebo GUI and no camera window
@@ -140,7 +143,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/target_sim.py"); do
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/(target_sim|ground_relay).py"); do
 		pids+=("${p}")
 	done
 
@@ -201,6 +204,11 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 		> "${SCRIPT_DIR}/build/target_sim.log" 2>&1 &
 	echo "Target: tools/target_sim.py in the background, log: ${SCRIPT_DIR}/build/target_sim.log"
 	echo "        position: http://localhost:8000/target (2 Hz), ADS-B in QGroundControl"
+
+	if [ "${RELAY:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
+		python3 -u "${SCRIPT_DIR}/tools/ground_relay.py" > "${SCRIPT_DIR}/build/ground_relay.log" 2>&1 &
+		echo "Relay:  tools/ground_relay.py, FOLLOW_TARGET to the interceptor, log: ${SCRIPT_DIR}/build/ground_relay.log"
+	fi
 fi
 
 if [ "${INTERCEPTOR}" != "0" ]; then
