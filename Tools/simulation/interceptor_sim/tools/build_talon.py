@@ -25,6 +25,7 @@ PART_AIL_LEFT = "part_00"    # +X in STEP == +y (left) in Gazebo
 PART_AIL_RIGHT = "part_03"
 PART_CANOPY = "part_01"      # front window ("Cam - Pencere")
 CANOPY_TRANSPARENCY = 0.35
+PAINT_RGB = (0.965, 0.965, 0.953)  # whole aircraft in one colour (white); None = CAD paint colours
 
 MASS = 3.0              # [kg] take-off mass, TODO: weigh the real aircraft
 PROP_RADIUS = 0.127     # [m] 10" pusher prop
@@ -194,14 +195,14 @@ def main():
 	for i, cm in enumerate(parts[PART_BODY]["colour_meshes"]):
 		fname = "body_%d.stl" % i
 		write_stl(os.path.join(mesh_dir, fname), read_stl(os.path.join(a.parts_dir, cm["file"])) @ R_STEP_TO_GZ.T - cg)
-		body_visuals.append((fname, cm["colour"], cm["rgb"]))
+		body_visuals.append((fname, cm["colour"], PAINT_RGB or cm["rgb"]))
 
 	for old in os.listdir(mesh_dir):  # meshes of an older generator version
 		if old.startswith("body") and old not in [v[0] for v in body_visuals]:
 			os.remove(os.path.join(mesh_dir, old))
 
-	geo = dict(body_visuals=body_visuals, ail_rgb=parts[PART_AIL_LEFT]["rgb"],
-		   canopy_rgb=parts[PART_CANOPY]["rgb"], mass=MASS, I=inertia, belly_z=belly_z, area=area, mac=mac, ar=ar, ac_x=ac_x,
+	geo = dict(body_visuals=body_visuals, ail_rgb=PAINT_RGB or parts[PART_AIL_LEFT]["rgb"],
+		   canopy_rgb=PAINT_RGB or parts[PART_CANOPY]["rgb"], mass=MASS, I=inertia, belly_z=belly_z, area=area, mac=mac, ar=ar, ac_x=ac_x,
 		   ail_l_p=ail_l_p, ail_l_axis=ail_l_axis, ail_r_p=ail_r_p, ail_r_axis=ail_r_axis,
 		   rv_l_p=rv_l_p, rv_l_axis=rv_l_axis, rv_r_p=rv_r_p, rv_r_axis=rv_r_axis,
 		   mot=[mot_x, 0, mot_z], max_rot=max_rot, fus_box=fus_box, fus_ctr=fus_ctr,
@@ -341,7 +342,7 @@ def sdf(g):
       <visual name="canopy_visual">
         <geometry><mesh><uri>model://talon1718/meshes/canopy.stl</uri></mesh></geometry>
         <material><ambient>{fmt(list(g["canopy_rgb"]) + [1], 3)}</ambient><diffuse>{fmt(list(g["canopy_rgb"]) + [1], 3)}</diffuse><specular>0.9 0.9 0.9 1</specular></material>
-        <transparency>{CANOPY_TRANSPARENCY}</transparency>
+        <transparency>{0 if PAINT_RGB else CANOPY_TRANSPARENCY}</transparency>
       </visual>"""
 
 	return f"""<?xml version="1.0"?>

@@ -49,8 +49,8 @@ aero:
   cd_body_side: 0.9     # fuselage in cross flow
   cd_body_axial: 0.35
 
-camera:                 # nose camera (off by default, rendering costs sim speed)
-  enabled: false
+camera:                 # nose camera, streamed on udp 5600 by plugins/camera_stream (window: tools/view.sh)
+  enabled: true
   width: 1280
   height: 720
   hfov_deg: 60

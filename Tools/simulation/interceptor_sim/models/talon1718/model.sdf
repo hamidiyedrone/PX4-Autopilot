@@ -18,20 +18,20 @@
       </visual>
       <visual name="body_1_visual"><!-- Boya - Parlak Emaye (Yeşil) -->
         <geometry><mesh><uri>model://talon1718/meshes/body_1.stl</uri></mesh></geometry>
-        <material><ambient>0.267 0.588 0.282 1.000</ambient><diffuse>0.267 0.588 0.282 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>
       <visual name="body_2_visual"><!-- Boya - Parlak Emaye (Siyah) -->
         <geometry><mesh><uri>model://talon1718/meshes/body_2.stl</uri></mesh></geometry>
-        <material><ambient>0.098 0.098 0.098 1.000</ambient><diffuse>0.098 0.098 0.098 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>
       <visual name="body_3_visual"><!-- Boya - Parlak Emaye (Kırmızı) -->
         <geometry><mesh><uri>model://talon1718/meshes/body_3.stl</uri></mesh></geometry>
-        <material><ambient>0.769 0.208 0.153 1.000</ambient><diffuse>0.769 0.208 0.153 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>
       <visual name="canopy_visual">
         <geometry><mesh><uri>model://talon1718/meshes/canopy.stl</uri></mesh></geometry>
-        <material><ambient>0.424 0.769 0.855 1.000</ambient><diffuse>0.424 0.769 0.855 1.000</diffuse><specular>0.9 0.9 0.9 1</specular></material>
-        <transparency>0.35</transparency>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse><specular>0.9 0.9 0.9 1</specular></material>
+        <transparency>0</transparency>
       </visual>
       <collision name="fuselage_collision">
         <pose>-0.0608 0.0000 -0.0139 0 0 0</pose>
@@ -133,7 +133,7 @@
       </inertial>
       <visual name="left_aileron_visual">
         <geometry><mesh><uri>model://talon1718/meshes/aileron_left.stl</uri></mesh></geometry>
-        <material><ambient>0.098 0.098 0.098 1.000</ambient><diffuse>0.098 0.098 0.098 1.000</diffuse></material>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse></material>
       </visual>
     </link>
     <link name="right_aileron">
@@ -144,7 +144,7 @@
       </inertial>
       <visual name="right_aileron_visual">
         <geometry><mesh><uri>model://talon1718/meshes/aileron_right.stl</uri></mesh></geometry>
-        <material><ambient>0.098 0.098 0.098 1.000</ambient><diffuse>0.098 0.098 0.098 1.000</diffuse></material>
+        <material><ambient>0.965 0.965 0.953 1.000</ambient><diffuse>0.965 0.965 0.953 1.000</diffuse></material>
       </visual>
     </link>
     <link name="left_ruddervator">

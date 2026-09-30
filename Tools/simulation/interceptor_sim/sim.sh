@@ -6,6 +6,9 @@
 # publishes its position at 2 Hz (HTTP JSON http://localhost:8000/target, and
 # ADS-B through the interceptor PX4 to QGroundControl).
 #
+# The interceptor nose camera is streamed as H.264 (udp 5600) and shown in its own
+# window (tools/view.sh; QGroundControl's video source must stay disabled).
+#
 #   make px4_sitl                                   # once (and after airframe changes)
 #   Tools/simulation/interceptor_sim/sim.sh         # GUI
 #   HEADLESS=1 Tools/simulation/interceptor_sim/sim.sh
@@ -19,6 +22,11 @@
 #   TARGET_ARGS       arguments for tools/target_sim.py, e.g. "--alt 60 --speed 18"
 #   TARGET_POSE       x,y,z,roll,pitch,yaw of the target spawn. The model origin is its
 #                     CG, 0.12 m above the belly. Default: worlds/<WORLD>.env, else 0,0,0.15,0,0,0
+#   HEADLESS          1: no Gazebo GUI and no camera window
+#   VIEW              0: do not open the camera window
+#   NVIDIA_OFFLOAD    0: do not force rendering on the NVIDIA GPU (hybrid graphics laptops)
+#   CAMERA_STREAM_ENCODERS  encoder order for the camera streams, default auto
+#                     (nvenc,nvcuda,vaapi,va,qsv,x264); CAMERA_STREAM_HOST / _PORT: destination
 #   INTERCEPTOR       0 to start the target only
 #   INTERCEPTOR_POSE  x,y,z,roll,pitch,yaw of the interceptor spawn. Default: next to the
 #                     target (worlds/<WORLD>.env), height from models/interceptor/model.sdf
@@ -64,6 +72,32 @@ fi
 # shellcheck disable=SC1091
 . "${BUILD_DIR}/rootfs/gz_env.sh"
 export GZ_SIM_RESOURCE_PATH="${SCRIPT_DIR}/models:${SCRIPT_DIR}/worlds:${GZ_SIM_RESOURCE_PATH}"
+# PX4's server.config, but with our camera stream plugin (udp 5600+, hardware H.264 when possible)
+export GZ_SIM_SERVER_CONFIG_PATH="${SCRIPT_DIR}/gz/server.config"
+
+# our Gazebo plugins (plugins/*): build when missing or changed
+for plugin_dir in "${SCRIPT_DIR}"/plugins/*/; do
+	name=$(basename "${plugin_dir}")
+	plugin_build="${SCRIPT_DIR}/build/plugins/${name}"
+	lib=$(find "${plugin_build}" -maxdepth 1 -name 'lib*.so' 2>/dev/null | head -1)
+
+	if [ -z "${lib}" ] || [ -n "$(find "${plugin_dir}" -newer "${lib}" -type f)" ]; then
+		echo "Building the ${name} plugin"
+		cmake -S "${plugin_dir}" -B "${plugin_build}" -DCMAKE_BUILD_TYPE=Release > /dev/null
+		cmake --build "${plugin_build}" -j"$(nproc)" > /dev/null
+	fi
+
+	export GZ_SIM_SYSTEM_PLUGIN_PATH="${plugin_build}:${GZ_SIM_SYSTEM_PLUGIN_PATH}"
+done
+
+# Hybrid graphics (NVIDIA PRIME on-demand): render the Gazebo GUI and the camera sensors on the
+# NVIDIA GPU instead of the integrated one
+if [ "${NVIDIA_OFFLOAD:-1}" != "0" ] && command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+	export __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia
+	[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ] && \
+		export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+	echo "Rendering on the NVIDIA GPU (NVIDIA_OFFLOAD=0 to disable)"
+fi
 export GZ_IP=127.0.0.1
 
 kill_tree() { # pid: the process and all its descendants
@@ -76,16 +110,66 @@ kill_tree() { # pid: the process and all its descendants
 	kill "$1" 2>/dev/null || true
 }
 
+# every process started from here inherits this; gz sim detaches from its parent, so
+# the cleanup finds its server and GUI by this variable instead of the process tree
+export INTERCEPTOR_SIM_ID=$$
+
 cleanup() {
-	# PX4 instances run in subshells, so kill every descendant of this script
-	for child in $(pgrep -P $$); do
-		kill_tree "${child}"
+	local p
+
+	for p in $(pgrep -P $$); do
+		kill_tree "${p}"
+	done
+
+	for p in $(pgrep -f "gz sim"); do
+		tr '\0' '\n' < "/proc/${p}/environ" 2>/dev/null | grep -qx "INTERCEPTOR_SIM_ID=$$" && kill_tree "${p}"
 	done
 }
 trap cleanup EXIT
 
 world_file="${SCRIPT_DIR}/worlds/${WORLD}.sdf"
 [ -f "${world_file}" ] || world_file="${PX4_GZ_WORLDS}/${WORLD}.sdf"
+
+# Stop what a previous run left behind: a second server in the same partition mixes up the
+# GUI (empty scene), PX4 instances hold their instance lock and ports, target_sim.py port 8000.
+stop_previous() {
+	local p pids=() part
+
+	for p in $(pgrep -f "^gz sim"); do
+		part=$(tr '\0' '\n' < "/proc/${p}/environ" 2>/dev/null | sed -n 's/^GZ_PARTITION=//p')
+		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
+	done
+
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/target_sim.py"); do
+		pids+=("${p}")
+	done
+
+	[ ${#pids[@]} -eq 0 ] && return
+
+	echo "Stopping processes of a previous simulation: ${pids[*]}"
+
+	for p in "${pids[@]}"; do
+		kill_tree "${p}"
+	done
+
+	# up to 5 s to exit, then force
+	for _ in $(seq 20); do
+		local alive=0
+
+		for p in "${pids[@]}"; do
+			kill -0 "${p}" 2>/dev/null && alive=1
+		done
+
+		[ "${alive}" = 0 ] && return
+		sleep 0.25
+	done
+
+	for p in "${pids[@]}"; do
+		kill -9 "${p}" 2>/dev/null || true
+	done
+}
+
+stop_previous
 
 echo "Starting Gazebo world ${world_file}"
 gz sim --verbose=1 -r -s "${world_file}" &
@@ -129,6 +213,10 @@ if [ "${INTERCEPTOR}" != "0" ]; then
 
 	echo "Spawning ${INTERCEPTOR_NAME} at ${INTERCEPTOR_POSE}"
 	spawn "${INTERCEPTOR_NAME}" interceptor "${INTERCEPTOR_POSE}"
+fi
+
+if [ "${VIEW:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
+	"${SCRIPT_DIR}/tools/view.sh" > /dev/null 2>&1 &
 fi
 
 start_px4() { # instance autostart model_name [px4 options]
