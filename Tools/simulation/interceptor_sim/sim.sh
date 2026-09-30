@@ -23,6 +23,7 @@
 #   TARGET_AUTO       0: do not start tools/target_sim.py (the target stays on the runway)
 #   TARGET_ARGS       arguments for tools/target_sim.py, e.g. "--alt 60 --speed 18"
 #   RELAY             0: do not start tools/ground_relay.py (no FOLLOW_TARGET to the interceptor)
+#   DETECTOR          0: do not start tools/sim_detector.py (no vision detections)
 #   TARGET_POSE       x,y,z,roll,pitch,yaw of the target spawn. The model origin is its
 #                     CG, 0.12 m above the belly. Default: worlds/<WORLD>.env, else 0,0,0.15,0,0,0
 #   HEADLESS          1: no Gazebo GUI and no camera window
@@ -143,7 +144,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/(target_sim|ground_relay).py"); do
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector).py"); do
 		pids+=("${p}")
 	done
 
@@ -208,6 +209,13 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 	if [ "${RELAY:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
 		python3 -u "${SCRIPT_DIR}/tools/ground_relay.py" > "${SCRIPT_DIR}/build/ground_relay.log" 2>&1 &
 		echo "Relay:  tools/ground_relay.py, FOLLOW_TARGET to the interceptor, log: ${SCRIPT_DIR}/build/ground_relay.log"
+	fi
+
+	if [ "${DETECTOR:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
+		python3 -u "${SCRIPT_DIR}/tools/sim_detector.py" --world "${WORLD}" \
+			--interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" \
+			> "${SCRIPT_DIR}/build/sim_detector.log" 2>&1 &
+		echo "Detector: tools/sim_detector.py, ground-truth vision → udp 15600, log: ${SCRIPT_DIR}/build/sim_detector.log"
 	fi
 fi
 

@@ -1,0 +1,51 @@
+module_name: Target Vision
+serial_config:
+    - command: target_vision start -d ${SERIAL_DEV} -b p:${BAUD_PARAM}
+      port_config_param:
+        name: TGV_CFG
+        group: Target vision
+      label: Vision computer
+
+parameters:
+    - group: Target vision
+      definitions:
+        TGV_MNT_ROLL:
+            description:
+                short: Camera mount roll
+                long: |
+                    Rotation of the camera away from looking straight forward, applied as
+                    yaw-pitch-roll (TGV_MNT_YAW, TGV_MNT_PITCH, TGV_MNT_ROLL) about the body axes.
+                    The interceptor camera looks along the thrust axis, i.e. straight up in hover:
+                    TGV_MNT_PITCH = 90, the others 0.
+            type: float
+            unit: deg
+            min: -180
+            max: 180
+            decimal: 1
+            default: 0.0
+
+        TGV_MNT_PITCH:
+            description:
+                short: Camera mount pitch
+                long: |
+                    Camera pitch away from looking straight forward, positive tilts the view up.
+                    90 means the camera looks along the thrust axis. See TGV_MNT_ROLL.
+            type: float
+            unit: deg
+            min: -180
+            max: 180
+            decimal: 1
+            default: 0.0
+
+        TGV_MNT_YAW:
+            description:
+                short: Camera mount yaw
+                long: |
+                    Camera yaw away from looking straight forward, positive turns the view right.
+                    See TGV_MNT_ROLL.
+            type: float
+            unit: deg
+            min: -180
+            max: 180
+            decimal: 1
+            default: 0.0

@@ -55,3 +55,4 @@ camera:                 # nose camera, streamed on udp 5600 by plugins/camera_st
   height: 720
   hfov_deg: 60
   rate: 30
+  detect_port: 15600    # udp port of the target_vision driver, tools/sim_detector.py sends there

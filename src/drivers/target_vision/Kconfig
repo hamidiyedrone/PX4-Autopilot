@@ -1,0 +1,5 @@
+menuconfig DRIVERS_TARGET_VISION
+	bool "target_vision"
+	default n
+	---help---
+		Link to the vision computer that detects the target (UART, or UDP in SITL)
