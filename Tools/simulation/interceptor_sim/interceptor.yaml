@@ -1,0 +1,57 @@
+# Interceptor drone, input of tools/build_interceptor.py
+#
+# Bullet-shaped fuselage standing on its tail in hover (nose up), 4 motors in
+# "+" layout on arms near the tail, thrust along the fuselage axis towards the
+# nose, 2 fixed wing plates next to the left/right arms. Flown as a normal
+# quadcopter (no VTOL transition), strongly pitched forward at speed.
+#
+# Frame (= PX4 hover body frame, FLU): origin at the computed CG,
+# z along the fuselage towards the nose, x to the front arm, y to the left arm.
+# Positions of the fuselage content are measured from the tail end along the axis.
+# Motors and wings are placed relative to the CG.
+# Masses in kg, lengths in m.
+
+name: interceptor
+
+fuselage:
+  diameter: 0.12
+  length: 0.46          # tail end to nose tip
+  nose_length: 0.06     # rounded nose cap
+  mass: 0.450           # shell
+
+components:             # inside the fuselage, z = centre height above the tail end
+  battery:      {mass: 0.650, size: [0.07, 0.045, 0.15], z: 0.13}
+  avionics:     {mass: 0.200, size: [0.08, 0.08, 0.05],  z: 0.24}   # FC, ESC, companion, camera
+  net_launcher: {mass: 0.350, size: [0.09, 0.09, 0.12],  z: 0.36}   # net + launcher, fires through the nose
+
+motors:
+  count: 4
+  mass: 0.065           # each
+  arm_mass: 0.075       # all 4 arms together
+  arm_radius: 0.20      # fuselage axis to motor axis
+  arm_diameter: 0.025
+  z_from_cg: -0.08      # motor plane relative to the CG (negative = towards the tail)
+  prop_diameter_inch: 7
+  max_thrust_n: 24.0    # each, static, at full throttle (datasheet)
+  motor_constant: 8.54858e-06   # x500 motor model, thrust = k * omega^2
+  moment_constant: 0.016
+
+wings:
+  mass: 0.040           # both
+  chord: 0.11           # along the fuselage axis
+  span_out: 0.09        # each plate, from the fuselage surface outwards
+  thickness: 0.005
+  z_from_cg: 0.02       # plate centre relative to the CG
+
+aero:
+  top_speed: 45.0       # [m/s] level flight at full thrust; the motor model has no thrust loss
+                        # with inflow speed, so extra axial drag is added to match this
+  cd_body_side: 0.9     # fuselage in cross flow
+  cd_body_axial: 0.35
+
+camera:                 # nose camera (off by default, rendering costs sim speed)
+  enabled: false
+  width: 1280
+  height: 720
+  hfov_deg: 60
+  rate: 30
