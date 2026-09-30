@@ -17,7 +17,7 @@ Telemetry of the target, at --rate Hz (default 2):
 The first side of the square is the runway extension (world origin = runway
 start, see tools/build_world.py), the square extends to the left of it.
 
-    python3 tools/target_sim.py [--alt 100] [--speed 25] [--side 1000] [--http-port 8000]
+    python3 tools/target_sim.py [--alt 100] [--speed 25] [--side 2000] [--http-port 8000]
 """
 
 import argparse
@@ -253,7 +253,7 @@ def main():
 	ap.add_argument("--model", default="talon1718_1")
 	ap.add_argument("--alt", type=float, default=100.0, help="circuit altitude above the runway [m]")
 	ap.add_argument("--speed", type=float, default=25.0, help="[m/s]")
-	ap.add_argument("--side", type=float, default=1000.0, help="square side [m]")
+	ap.add_argument("--side", type=float, default=2000.0, help="square side [m]")
 	ap.add_argument("--bank", type=float, default=35.0, help="bank angle in the corners [deg]")
 	ap.add_argument("--accel", type=float, default=4.0, help="take-off acceleration [m/s^2]")
 	ap.add_argument("--climb-angle", type=float, default=8.0, help="[deg]")
