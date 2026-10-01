@@ -114,6 +114,12 @@ kill_tree() { # pid: the process and all its descendants
 	kill "$1" 2>/dev/null || true
 }
 
+# background processes get a signal from the kernel when this script dies, also when it is
+# killed with SIGKILL and the cleanup trap below cannot run (else they keep running).
+# gz sim gets KILL: it does not exit on TERM once its parent is gone
+PDEATH="setpriv --pdeathsig TERM --"
+PDEATH_GZ="setpriv --pdeathsig KILL --"
+
 # every process started from here inherits this; gz sim detaches from its parent, so
 # the cleanup finds its server and GUI by this variable instead of the process tree
 export INTERCEPTOR_SIM_ID=$$
@@ -144,7 +150,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 -u ${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector).py"); do
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud).py"); do
 		pids+=("${p}")
 	done
 
@@ -176,10 +182,10 @@ stop_previous() {
 stop_previous
 
 echo "Starting Gazebo world ${world_file}"
-gz sim --verbose=1 -r -s "${world_file}" &
+${PDEATH_GZ} gz sim --verbose=1 -r -s "${world_file}" &
 
 if [ -z "${HEADLESS}" ]; then
-	gz sim -g >/dev/null 2>&1 &
+	${PDEATH_GZ} gz sim -g >/dev/null 2>&1 &
 fi
 
 for _ in $(seq 30); do
@@ -201,18 +207,18 @@ spawn "${TARGET_NAME}" talon1718 "${TARGET_POSE}" \
 if [ "${TARGET_AUTO:-1}" != "0" ]; then
 	mkdir -p "${SCRIPT_DIR}/build"
 	# shellcheck disable=SC2086
-	python3 -u "${SCRIPT_DIR}/tools/target_sim.py" --world "${WORLD}" --model "${TARGET_NAME}" ${TARGET_ARGS} \
+	${PDEATH} python3 -u "${SCRIPT_DIR}/tools/target_sim.py" --world "${WORLD}" --model "${TARGET_NAME}" ${TARGET_ARGS} \
 		> "${SCRIPT_DIR}/build/target_sim.log" 2>&1 &
 	echo "Target: tools/target_sim.py in the background, log: ${SCRIPT_DIR}/build/target_sim.log"
 	echo "        position: http://localhost:8000/target (2 Hz), ADS-B in QGroundControl"
 
 	if [ "${RELAY:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
-		python3 -u "${SCRIPT_DIR}/tools/ground_relay.py" > "${SCRIPT_DIR}/build/ground_relay.log" 2>&1 &
+		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/ground_relay.py" > "${SCRIPT_DIR}/build/ground_relay.log" 2>&1 &
 		echo "Relay:  tools/ground_relay.py, FOLLOW_TARGET to the interceptor, log: ${SCRIPT_DIR}/build/ground_relay.log"
 	fi
 
 	if [ "${DETECTOR:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
-		python3 -u "${SCRIPT_DIR}/tools/sim_detector.py" --world "${WORLD}" \
+		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/sim_detector.py" --world "${WORLD}" \
 			--interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" \
 			> "${SCRIPT_DIR}/build/sim_detector.log" 2>&1 &
 		echo "Detector: tools/sim_detector.py, ground-truth vision → udp 15600, log: ${SCRIPT_DIR}/build/sim_detector.log"
@@ -232,7 +238,7 @@ if [ "${INTERCEPTOR}" != "0" ]; then
 fi
 
 if [ "${VIEW:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
-	"${SCRIPT_DIR}/tools/view.sh" > /dev/null 2>&1 &
+	${PDEATH} "${SCRIPT_DIR}/tools/view.sh" > /dev/null 2>&1 &
 fi
 
 start_px4() { # instance autostart model_name [px4 options]
