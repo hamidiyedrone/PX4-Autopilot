@@ -149,7 +149,7 @@ def main():
                     help="UDP port of the target_vision driver")
     ap.add_argument("--rate", type=float, default=30.0,
                     help="detection rate [Hz]")
-    ap.add_argument("--max-range", type=float, default=500.0,
+    ap.add_argument("--max-range", type=float, default=100.0,
                     help="max detection range [m]")
     ap.add_argument("--hfov", type=float, default=None,
                     help="camera HFOV [deg], default: from interceptor.yaml")
@@ -182,17 +182,16 @@ def main():
         talon_pts = None
 
     # gz camera sensor pose relative to the interceptor body:
-    # from build_interceptor.py: <pose>0 0 {nose} 0 -1.5708 0</pose>
-    # This means the sensor is at the nose tip, pitched -90° so its +x axis
-    # (gz camera forward) aligns with the interceptor's +z (thrust/nose direction).
-    # We need R_body_cam_gz to go from body frame to gz-camera frame.
-    cam_pitch = -math.pi / 2
-    cp, sp = math.cos(cam_pitch), math.sin(cam_pitch)
+    # In SDF, the sensor pose is <pose>0 0 {nose} 0 -1.5708 0</pose> (pitched -90° in body).
+    # In Gazebo, +x is the camera sensor's forward optical axis.
+    # Since the camera looks out of the interceptor nose (+z in body FLU),
+    # body +z must map to gz-camera +x.
+    # Therefore, the rotation taking body-frame vectors into gz-camera vectors is:
     R_cam_gz_body = np.array([
-        [ cp, 0, sp],
-        [  0, 1,  0],
-        [-sp, 0, cp]
-    ])  # rotation that takes body-frame vectors into gz-camera-frame vectors
+        [ 0., 0., 1.],
+        [ 0., 1., 0.],
+        [-1., 0., 0.]
+    ])
 
     # camera offset in the body frame (approximately at the nose)
     fus_len = cfg["fuselage"]["length"]
@@ -326,9 +325,9 @@ def main():
         # bounding box from projected vertices
         bbox = [0.0, 0.0, 0.0, 0.0]
         if talon_pts is not None:
-            # transform Talon vertices to camera optical frame
+            # transform Talon vertices relative to camera, then into camera optical frame
             pts_world = (R_tgt @ talon_pts.T).T + p_tgt
-            pts_cam = (R_cam_opt_world @ pts_world.T).T
+            pts_cam = (R_cam_opt_world @ (pts_world - p_cam_world).T).T
             # project only points in front of the camera
             in_front = pts_cam[:, 2] > 0.1
             if np.any(in_front):
