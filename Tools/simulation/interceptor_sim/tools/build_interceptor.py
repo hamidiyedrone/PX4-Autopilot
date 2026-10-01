@@ -387,6 +387,9 @@ def post(detect_port):
 # to this port; on the vehicle the Jetson is on a serial port instead (TGV_CFG).
 target_vision start -u {detect_port}
 intercept start
+
+# HUD link of tools/view_hud.py (the camera window), next to QGroundControl's 14550
+mavlink start -u $((18590+px4_instance)) -o $((14551+px4_instance)) -r 400000 -m custom
 """
 
 

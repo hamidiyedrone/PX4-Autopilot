@@ -8,8 +8,8 @@
 PORT="${1:-5600}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Launch HUD viewer with bounding box and 3D pose if Python OpenCV and Gazebo transport are available
-if python3 -c "import cv2, gz.transport13" 2>/dev/null; then
+# Launch the HUD viewer (target box, flight data from PX4) if OpenCV, Gazebo transport and pymavlink are available
+if python3 -c "import cv2, gz.transport13, pymavlink" 2>/dev/null; then
 	exec python3 "${SCRIPT_DIR}/view_hud.py" "$@"
 fi
 
