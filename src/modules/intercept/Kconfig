@@ -1,0 +1,5 @@
+menuconfig MODULES_INTERCEPT
+	bool "intercept"
+	default n
+	---help---
+		Enable support for intercept flight mode

@@ -1,0 +1,11 @@
+module_name: Intercept
+
+parameters:
+    - group: Intercept
+      definitions:
+        INT_ENABLE:
+            description:
+                short: Enable intercept flight mode
+                long: Enables the target intercept autonomous flight mode.
+            type: boolean
+            default: 1

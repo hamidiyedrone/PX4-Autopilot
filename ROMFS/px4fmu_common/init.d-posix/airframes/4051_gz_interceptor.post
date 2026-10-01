@@ -5,3 +5,4 @@
 # The detector (Tools/simulation/interceptor_sim/tools/sim_detector.py) sends its detections
 # to this port; on the vehicle the Jetson is on a serial port instead (TGV_CFG).
 target_vision start -u 15600
+intercept start
