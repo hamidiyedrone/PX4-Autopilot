@@ -386,6 +386,7 @@ def post(detect_port):
 # The detector (Tools/simulation/interceptor_sim/tools/sim_detector.py) sends its detections
 # to this port; on the vehicle the Jetson is on a serial port instead (TGV_CFG).
 target_vision start -u {detect_port}
+intercept start
 """
 
 
@@ -438,16 +439,16 @@ param set-default CA_ROTOR_COUNT 4
 param set-default MPC_THR_HOVER {thr_hover:.2f}
 {cam}
 # fast and aggressive: strong tilt, high speeds / accelerations
-param set-default MPC_TILTMAX_AIR 70
-param set-default MPC_XY_VEL_MAX 20
-param set-default MPC_XY_CRUISE 15
-param set-default MPC_ACC_HOR_MAX 15
-param set-default MPC_ACC_HOR 10
-param set-default MPC_Z_VEL_MAX_UP 8
+param set-default MPC_TILTMAX_AIR 78
+param set-default MPC_XY_VEL_MAX 45
+param set-default MPC_XY_CRUISE 30
+param set-default MPC_ACC_HOR_MAX 25
+param set-default MPC_ACC_HOR 15
+param set-default MPC_Z_VEL_MAX_UP 12
 
 # manual flight from the ground station: Altitude / Stabilized modes are limited by tilt only
-param set-default MPC_MAN_TILT_MAX 70
-param set-default MPC_VEL_MANUAL 20
+param set-default MPC_MAN_TILT_MAX 78
+param set-default MPC_VEL_MANUAL 35
 
 # the wing plates carry part of the weight at speed; with decoupled tilt the controller would
 # reduce thrust at constant tilt, lose horizontal thrust and wind the velocity integrator down

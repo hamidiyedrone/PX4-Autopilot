@@ -32,7 +32,7 @@ motors:
   arm_diameter: 0.025
   z_from_cg: -0.08      # motor plane relative to the CG (negative = towards the tail)
   prop_diameter_inch: 7
-  max_thrust_n: 24.0    # each, static, at full throttle (datasheet)
+  max_thrust_n: 40.0    # each, static, at full throttle (datasheet)
   motor_constant: 8.54858e-06   # x500 motor model, thrust = k * omega^2
   moment_constant: 0.016
 
