@@ -103,7 +103,7 @@ def main():
 	w_min = 150.0
 	weight = m_tot * G
 	w_hover = math.sqrt(weight / n_mot / k)
-	thr_hover = (w_hover - w_min) / (w_max - w_min)
+	thr_hover = weight / (n_mot * t_max)
 	prop_d = mot["prop_diameter_inch"] * 0.0254
 	prop_scale = prop_d / PROP_MESH_LENGTH
 
@@ -439,15 +439,17 @@ param set-default CA_AIRFRAME 0
 param set-default CA_ROTOR_COUNT 4
 {body}
 
-param set-default MPC_THR_HOVER {thr_hover:.2f}
+param set-default THR_MDL_FAC 0.0
+param set-default MPC_THR_HOVER 0.38
 {cam}
 # fast and aggressive: strong tilt, high speeds / accelerations
 param set-default MPC_TILTMAX_AIR 78
 param set-default MPC_XY_VEL_MAX 45
-param set-default MPC_XY_CRUISE 30
-param set-default MPC_ACC_HOR_MAX 25
-param set-default MPC_ACC_HOR 15
+param set-default MPC_XY_CRUISE 38
+param set-default MPC_ACC_HOR_MAX 12
+param set-default MPC_ACC_HOR 6
 param set-default MPC_Z_VEL_MAX_UP 12
+param set-default MPC_Z_VEL_MAX_DN 4.0
 
 # manual flight from the ground station: Altitude / Stabilized modes are limited by tilt only
 param set-default MPC_MAN_TILT_MAX 78

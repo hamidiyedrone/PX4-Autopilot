@@ -50,6 +50,7 @@
 #include <uORB/topics/target_detection.h>
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/unregister_ext_component.h>
+#include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_status.h>
 
@@ -58,6 +59,11 @@ using namespace time_literals;
 class Intercept : public ModuleBase<Intercept>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
+	enum class GuidanceState : uint8_t {
+		MIDCOURSE_GPS = 0,
+		TERMINAL_VISUAL = 1
+	};
+
 	Intercept();
 	~Intercept() override;
 
@@ -85,12 +91,14 @@ private:
 	void UpdateTarget();
 	void UpdateVisualDetection();
 	void ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void ComputeTerminalVisualGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 	uORB::Subscription _register_ext_component_reply_sub{ORB_ID(register_ext_component_reply)};
 	uORB::Subscription _arming_check_request_sub{ORB_ID(arming_check_request)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _follow_target_sub{ORB_ID(follow_target)};
 	uORB::Subscription _target_detection_sub{ORB_ID(target_detection)};
@@ -114,6 +122,8 @@ private:
 	matrix::Vector3f _hold_position{};
 	float _hold_yaw{0.f};
 
+	GuidanceState _guidance_state{GuidanceState::MIDCOURSE_GPS};
+	vehicle_attitude_s _vehicle_attitude{};
 	vehicle_local_position_s _local_pos{};
 
 	// Target state from GPS (follow_target)
@@ -124,11 +134,40 @@ private:
 	hrt_abstime _last_target_update{0};
 
 	// Visual detection state from nose camera (target_detection)
+	target_detection_s _target_detection{};
 	bool _visual_contact{false};
 	float _visual_range{0.f};
 	hrt_abstime _last_visual_contact{0};
+	hrt_abstime _terminal_start_time{0};
+
+	// Coasting velocity and yaw during visual frame drops
+	matrix::Vector3f _last_vel_cmd{};
+	float _last_yaw_cmd{0.f};
+	bool _last_cmd_valid{false};
+
+	// Pure visual servoing states and optical derivative damping
+	float _last_cx{0.5f};
+	float _last_cy{0.5f};
+	float _last_y_top{0.5f};
+	float _last_w{0.22f};
+	float _filt_d_w_dt{0.f};
+	float _filt_d_ytop_dt{0.f};
+	float _filt_d_x_dt{0.f};
+	float _adaptive_base_speed{0.f};
+	bool _speed_initialized{false};
+	hrt_abstime _last_visual_time{0};
+
+	// Net deployment & target lock state
+	bool _target_locked{false};
+	hrt_abstime _lock_start_time{0};
+	bool _net_deployed{false};
 
 	DEFINE_PARAMETERS(
-		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable
+		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
+		(ParamFloat<px4::params::INT_TGT_SIZE>) _param_int_tgt_size,
+		(ParamFloat<px4::params::INT_TGT_YTOP>) _param_int_tgt_ytop,
+		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
+		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
+		(ParamFloat<px4::params::INT_K_CLIMB>) _param_int_k_climb
 	)
 };

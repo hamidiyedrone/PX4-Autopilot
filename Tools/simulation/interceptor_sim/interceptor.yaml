@@ -17,27 +17,27 @@ fuselage:
   diameter: 0.12
   length: 0.46          # tail end to nose tip
   nose_length: 0.06     # rounded nose cap
-  mass: 0.450           # shell
+  mass: 0.615           # shell
 
 components:             # inside the fuselage, z = centre height above the tail end
-  battery:      {mass: 0.650, size: [0.07, 0.045, 0.15], z: 0.13}
-  avionics:     {mass: 0.200, size: [0.08, 0.08, 0.05],  z: 0.24}   # FC, ESC, companion, camera
-  net_launcher: {mass: 0.350, size: [0.09, 0.09, 0.12],  z: 0.36}   # net + launcher, fires through the nose
+  battery:      {mass: 1.250, size: [0.07, 0.05, 0.16], z: 0.13}
+  avionics:     {mass: 0.470, size: [0.08, 0.08, 0.06],  z: 0.24}   # FC, ESC, companion, camera
+  net_launcher: {mass: 0.370, size: [0.09, 0.09, 0.12],  z: 0.36}   # net + launcher, fires through the nose
 
 motors:
   count: 4
-  mass: 0.065           # each
-  arm_mass: 0.075       # all 4 arms together
+  mass: 0.090           # each (90 g)
+  arm_mass: 0.120       # all 4 arms together
   arm_radius: 0.20      # fuselage axis to motor axis
   arm_diameter: 0.025
   z_from_cg: -0.08      # motor plane relative to the CG (negative = towards the tail)
-  prop_diameter_inch: 7
-  max_thrust_n: 40.0    # each, static, at full throttle (datasheet)
+  prop_diameter_inch: 9 # 9 inch
+  max_thrust_n: 34.33   # 3.5 kgf per motor (3.5 * 9.807 N)
   motor_constant: 8.54858e-06   # x500 motor model, thrust = k * omega^2
   moment_constant: 0.016
 
 wings:
-  mass: 0.040           # both
+  mass: 0.065           # both
   chord: 0.11           # along the fuselage axis
   span_out: 0.09        # each plate, from the fuselage surface outwards
   thickness: 0.005

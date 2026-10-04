@@ -9,3 +9,53 @@ parameters:
                 long: Enables the target intercept autonomous flight mode.
             type: boolean
             default: 1
+
+        INT_TGT_SIZE:
+            description:
+                short: Desired target bounding box width
+                long: Normalized screen width fraction of target for terminal standoff (0.10 to 0.70).
+            type: float
+            default: 0.20
+            min: 0.10
+            max: 0.70
+            decimal: 2
+
+        INT_TGT_YTOP:
+            description:
+                short: Desired target bounding box top edge Y position
+                long: Normalized screen Y position for target top edge (0.50 aligns with horizon/tail).
+            type: float
+            default: 0.50
+            min: 0.20
+            max: 0.80
+            decimal: 2
+
+        INT_KP_Z:
+            description:
+                short: Proportional gain for vertical visual tracking
+                long: Proportional gain (m/s per unit screen error) for vertical alignment.
+            type: float
+            default: 6.0
+            min: 0.5
+            max: 15.0
+            decimal: 2
+
+        INT_KP_LAT:
+            description:
+                short: Proportional gain for lateral visual tracking
+                long: Proportional gain (m/s per unit screen error) for tail-axis roll alignment.
+            type: float
+            default: 6.0
+            min: 0.5
+            max: 15.0
+            decimal: 2
+
+        INT_K_CLIMB:
+            description:
+                short: Climb priority forward speed reduction gain
+                long: Dynamic forward speed reduction gain when climbing towards target.
+            type: float
+            default: 16.5
+            min: 0.0
+            max: 30.0
+            decimal: 1
