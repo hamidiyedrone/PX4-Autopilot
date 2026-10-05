@@ -447,7 +447,7 @@ param set-default MPC_TILTMAX_AIR 78
 param set-default MPC_XY_VEL_MAX 45
 param set-default MPC_XY_CRUISE 38
 param set-default MPC_ACC_HOR_MAX 12
-param set-default MPC_ACC_HOR 6
+param set-default MPC_ACC_HOR 12
 param set-default MPC_Z_VEL_MAX_UP 12
 param set-default MPC_Z_VEL_MAX_DN 4.0
 

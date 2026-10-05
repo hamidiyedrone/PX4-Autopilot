@@ -126,14 +126,24 @@ def square_circuit(side, heading, radius):
 # ----------------------------------------------------------------- profile ---
 
 class Profile:
-	"""Speed and altitude along the path: take-off roll, climb, cruise; the square repeats."""
+	"""Speed and altitude along the path: take-off roll, climb, cruise; continuous weave or square."""
 
 	def __init__(self, a):
 		self.a = a
+		self.pattern = getattr(a, "pattern", "weave")
 		self.radius = a.speed ** 2 / (G * math.tan(math.radians(a.bank)))
 		self.yaw0 = math.radians(90 - a.heading)
-		self.path = square_circuit(a.side, self.yaw0, self.radius)
-		self.lap = self.path.length
+		self.u = np.array([math.cos(self.yaw0), math.sin(self.yaw0)])
+		self.n = np.array([-self.u[1], self.u[0]])  # left normal
+
+		if self.pattern == "square":
+			self.path = square_circuit(a.side, self.yaw0, self.radius)
+			self.lap = self.path.length
+		else:
+			self.wave_amp = getattr(a, "weave_amp", 26.0)
+			self.wave_len = getattr(a, "weave_wavelength", 550.0)
+			self.k_wave = 2.0 * math.pi / self.wave_len
+
 		self.s_roll = a.speed ** 2 / (2 * a.accel)
 		self.gamma = math.radians(a.climb_angle)
 		self.s_climb_end = self.s_roll + (a.alt - a.z0) / math.tan(self.gamma)
@@ -149,19 +159,26 @@ class Profile:
 		"""position (ENU), velocity, rotation, world angular velocity"""
 		s = self.s_at(t)  # from the runway start
 		v = self.speed_at(t)
-		s_loop = s - self.radius
-
-		if s_loop < 0:  # take-off roll, before the loop starts on the first side
-			p2, yaw, kappa = s * np.array([math.cos(self.yaw0), math.sin(self.yaw0)]), self.yaw0, 0.0
-		else:
-			p2, yaw, kappa = self.path.at(s_loop % self.lap)
 
 		if s < self.s_roll:
+			p2, yaw, kappa = s * self.u, self.yaw0, 0.0
 			z, gamma = self.a.z0, 0.0
-		elif s < self.s_climb_end:
-			z, gamma = self.a.z0 + (s - self.s_roll) * math.tan(self.gamma), self.gamma
+		elif self.pattern == "square":
+			s_loop = s - self.radius
+			p2, yaw, kappa = self.path.at(s_loop % self.lap)
+			z, gamma = (self.a.alt, 0.0) if s >= self.s_climb_end else (self.a.z0 + (s - self.s_roll) * math.tan(self.gamma), self.gamma)
 		else:
-			z, gamma = self.a.alt, 0.0
+			s_cruise = s - self.s_roll
+			fade = min(1.0, max(0.0, s_cruise / (self.wave_len * 0.5)))
+			phase = self.k_wave * s_cruise
+			y_offset = fade * self.wave_amp * math.sin(phase)
+			dy_ds = fade * self.wave_amp * self.k_wave * math.cos(phase)
+			d2y_ds2 = -fade * self.wave_amp * (self.k_wave ** 2) * math.sin(phase)
+
+			p2 = s * self.u + y_offset * self.n
+			yaw = self.yaw0 + math.atan(dy_ds)
+			kappa = d2y_ds2 / ((1.0 + dy_ds ** 2) ** 1.5)
+			z, gamma = (self.a.alt, 0.0) if s >= self.s_climb_end else (self.a.z0 + (s - self.s_roll) * math.tan(self.gamma), self.gamma)
 
 		# gz body frame x forward, y left, z up: + roll lowers the right wing, + pitch lowers the nose
 		roll = -math.atan(v * v * kappa / G)  # left turn (kappa > 0): left wing down
@@ -258,6 +275,10 @@ def main():
 	ap.add_argument("--accel", type=float, default=4.0, help="take-off acceleration [m/s^2]")
 	ap.add_argument("--climb-angle", type=float, default=8.0, help="[deg]")
 	ap.add_argument("--heading", type=float, default=None, help="first side [deg true], default: runway")
+	ap.add_argument("--pattern", choices=["weave", "square"], default="weave",
+			help="flight path pattern: 'weave' (continuous serpentine S-turns) or 'square' (square circuit)")
+	ap.add_argument("--weave-amp", type=float, default=26.0, help="lateral weave amplitude [m] (controls bank angle)")
+	ap.add_argument("--weave-wavelength", type=float, default=550.0, help="weave cycle wavelength [m]")
 	ap.add_argument("--rate", type=float, default=2.0, help="telemetry rate [Hz]")
 	ap.add_argument("--http-port", type=int, default=8000)
 	ap.add_argument("--adsb", default="udpout:127.0.0.1:14580", help="MAVLink target for ADSB_VEHICLE, '' = off")
@@ -292,8 +313,12 @@ def main():
 	node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
 	cmd_pub = node.advertise(f"/model/{a.model}/cmd_vel", Twist)
 
-	print(f"target: {a.side:.0f} m square, {a.alt:.0f} m, {a.speed:.0f} m/s, turn radius {profile.radius:.0f} m, "
-	      f"lap {profile.lap:.0f} m; HTTP :{a.http_port}/target, ADS-B {a.adsb or 'off'}", flush=True)
+	if profile.pattern == "square":
+		print(f"target: {a.side:.0f} m square, {a.alt:.0f} m, {a.speed:.0f} m/s, turn radius {profile.radius:.0f} m, "
+		      f"lap {profile.lap:.0f} m; HTTP :{a.http_port}/target, ADS-B {a.adsb or 'off'}", flush=True)
+	else:
+		print(f"target: continuous weave (amp {profile.wave_amp:.1f} m, cycle {profile.wave_len:.0f} m, ~12 deg bank), "
+		      f"{a.alt:.0f} m, {a.speed:.0f} m/s; HTTP :{a.http_port}/target, ADS-B {a.adsb or 'off'}", flush=True)
 
 	while "pose" not in state or "t" not in state:
 		time.sleep(0.1)

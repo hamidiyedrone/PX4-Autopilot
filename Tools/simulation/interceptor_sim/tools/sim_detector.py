@@ -149,7 +149,7 @@ def main():
                     help="UDP port of the target_vision driver")
     ap.add_argument("--rate", type=float, default=30.0,
                     help="detection rate [Hz]")
-    ap.add_argument("--max-range", type=float, default=100.0,
+    ap.add_argument("--max-range", type=float, default=50.0,
                     help="max detection range [m]")
     ap.add_argument("--hfov", type=float, default=None,
                     help="camera HFOV [deg], default: from interceptor.yaml")
@@ -324,6 +324,7 @@ def main():
 
         # bounding box from projected vertices
         bbox = [0.0, 0.0, 0.0, 0.0]
+        visible = False
         if talon_pts is not None:
             # transform Talon vertices relative to camera, then into camera optical frame
             pts_world = (R_tgt @ talon_pts.T).T + p_tgt
@@ -332,21 +333,30 @@ def main():
             in_front = pts_cam[:, 2] > 0.1
             if np.any(in_front):
                 pts_f = pts_cam[in_front]
-                u = fx * pts_f[:, 0] / pts_f[:, 2] + cx
-                v = fy * pts_f[:, 1] / pts_f[:, 2] + cy
-                # clip to image
-                u = np.clip(u, 0, width)
-                v = np.clip(v, 0, height)
+                u_raw = fx * pts_f[:, 0] / pts_f[:, 2] + cx
+                v_raw = fy * pts_f[:, 1] / pts_f[:, 2] + cy
+                # the whole silhouette must be in the image: a target cut by the edge is not visible
+                inside = (u_raw.min() >= 0 and u_raw.max() <= width and
+                          v_raw.min() >= 0 and v_raw.max() <= height)
+                u = np.clip(u_raw, 0, width)
+                v = np.clip(v_raw, 0, height)
                 u_min, u_max = u.min(), u.max()
                 v_min, v_max = v.min(), v.max()
                 bw, bh = u_max - u_min, v_max - v_min
-                if bw > 0.5 and bh > 0.5:
+                if bw > 0.5 and bh > 0.5 and inside:
+                    visible = True
                     bbox = [
                         float((u_min + u_max) / 2 / width),   # cx normalised
                         float((v_min + v_max) / 2 / height),  # cy normalised
                         float(bw / width),                     # w normalised
                         float(bh / height),                    # h normalised
                     ]
+
+        if not visible:
+            pkt = pack_packet(frame_id, 0, 0, 0,
+                              [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
+            sock.sendto(pkt, dest)
+            continue
 
         flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
         confidence = 255  # perfect detection

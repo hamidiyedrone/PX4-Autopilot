@@ -15,7 +15,7 @@ Values that PX4 has not sent for a while are shown as ---.
 Keys: h toggles the flight data, q / Esc quits.
 
 Usage:
-  python3 tools/view_hud.py [--world ankara] [--max-range 100] [--mavlink udpin:0.0.0.0:14551]
+  python3 tools/view_hud.py [--world ankara] [--max-range 50] [--mavlink udpin:0.0.0.0:14551]
 """
 
 import argparse
@@ -107,9 +107,12 @@ def read_stl_bounds(path):
 
 
 def talon_vertices():
-    """Load model vertices from STL meshes or fallback to bounding box corners."""
+    """Load model vertices from STL meshes or fallback to bounding box corners.
+
+    Only the mesh vertices: the corners of the 3D box lie outside the silhouette and
+    would make the image box about twice as large (same as tools/sim_detector.py)."""
     sdf_path = os.path.join(MODEL_DIR, "model.sdf")
-    pts = [TALON_BBOX_CORNERS]
+    pts = []
     if os.path.exists(sdf_path):
         try:
             sdf = open(sdf_path).read()
@@ -125,7 +128,7 @@ def talon_vertices():
                             pts.append(v + offset)
         except Exception:
             pass
-    return np.concatenate(pts)
+    return np.concatenate(pts) if pts else TALON_BBOX_CORNERS
 
 
 # ---------------------------------------------------------------------------------------
@@ -493,7 +496,7 @@ def main():
     ap.add_argument("--world", default="ankara")
     ap.add_argument("--interceptor", default="interceptor_0")
     ap.add_argument("--target", default="talon1718_1")
-    ap.add_argument("--max-range", type=float, default=100.0)
+    ap.add_argument("--max-range", type=float, default=50.0)
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14551", help="PX4 HUD link (see the airframe .post)")
     a = ap.parse_args()
 
@@ -644,10 +647,10 @@ def main():
                         pts_f = pts_cam[in_front_pts]
                         u_pts = fx * pts_f[:, 0] / pts_f[:, 2] + cx
                         v_pts = fy * pts_f[:, 1] / pts_f[:, 2] + cy
-                        u_min = int(np.clip(u_pts.min() - 2, 0, width - 1))
-                        u_max = int(np.clip(u_pts.max() + 2, 0, width - 1))
-                        v_min = int(np.clip(v_pts.min() - 2, 0, height - 1))
-                        v_max = int(np.clip(v_pts.max() + 2, 0, height - 1))
+                        u_min = int(np.clip(np.floor(u_pts.min()), 0, width - 1))
+                        u_max = int(np.clip(np.ceil(u_pts.max()), 0, width - 1))
+                        v_min = int(np.clip(np.floor(v_pts.min()), 0, height - 1))
+                        v_max = int(np.clip(np.ceil(v_pts.max()), 0, height - 1))
                         if u_max - u_min > 2 and v_max - v_min > 2:
                             tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
 
