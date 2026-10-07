@@ -87,11 +87,21 @@ def main():
 	try:
 		name = f"interceptor_{a.instance}"
 
+		# Read spawn z from model.sdf so the standing interceptor spawns cleanly on its legs
+		model_sdf = os.path.join(SIM_DIR, "models", "interceptor", "model.sdf")
+		spawn_z = 0.52
+		if os.path.exists(model_sdf):
+			import re
+			with open(model_sdf) as f:
+				m_pose = re.search(r"<pose>0 0 ([0-9.]+) 0 0 0</pose>", f.read())
+				if m_pose:
+					spawn_z = float(m_pose.group(1))
+
 		for _ in range(60):
 			r = subprocess.run(["gz", "service", "-s", f"/world/{WORLD}/create", "--reqtype", "gz.msgs.EntityFactory",
 					    "--reptype", "gz.msgs.Boolean", "--timeout", "3000", "--req",
 					    f'name: "{name}", sdf: \'<sdf version="1.9"><include><uri>model://interceptor</uri>'
-					    f'<pose>0 0 0.22 0 0 0</pose></include></sdf>\''], env=env, capture_output=True, text=True)
+					    f'<pose>0 0 {spawn_z:.3f} 0 0 0</pose></include></sdf>\''], env=env, capture_output=True, text=True)
 
 			if "data: true" in r.stdout:
 				break

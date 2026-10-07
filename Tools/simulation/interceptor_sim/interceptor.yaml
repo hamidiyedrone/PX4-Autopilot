@@ -1,12 +1,13 @@
-# Interceptor drone, input of tools/build_interceptor.py
+# Ukrainian Octopus interceptor drone, input of tools/build_interceptor.py
 #
-# Bullet-shaped fuselage standing on its tail in hover (nose up), 4 motors in
-# "+" layout on arms near the tail, thrust along the fuselage axis towards the
-# nose, 2 fixed wing plates next to the left/right arms. Flown as a normal
-# quadcopter (no VTOL transition), strongly pitched forward at speed.
+# Slender cylindrical fuselage standing on its 4 landing legs in hover (nose up),
+# 4 motors on aerodynamic wing-shaped arms in "X" layout (50 cm motor-to-motor span,
+# 10" props), thrust along the fuselage axis towards the nose, 4 tail fins for high-speed
+# stability. Flown as a quadrotor tailsitter (no VTOL transition), strongly pitched
+# forward at speed to pursue and intercept targets.
 #
 # Frame (= PX4 hover body frame, FLU): origin at the computed CG,
-# z along the fuselage towards the nose, x to the front arm, y to the left arm.
+# z along the fuselage towards the nose, x forward, y left.
 # Positions of the fuselage content are measured from the tail end along the axis.
 # Motors and wings are placed relative to the CG.
 # Masses in kg, lengths in m.
@@ -14,45 +15,54 @@
 name: interceptor
 
 fuselage:
-  diameter: 0.12
-  length: 0.46          # tail end to nose tip
-  nose_length: 0.06     # rounded nose cap
-  mass: 0.615           # shell
+  diameter: 0.14        # 14 cm cylinder diameter
+  length: 1.00          # 100 cm total length (tail end to nose tip)
+  nose_length: 0.10     # rounded ogive nose cap
+  mass: 1.100           # composite cylindrical shell and internal structure
 
 components:             # inside the fuselage, z = centre height above the tail end
-  battery:      {mass: 1.250, size: [0.07, 0.05, 0.16], z: 0.13}
-  avionics:     {mass: 0.470, size: [0.08, 0.08, 0.06],  z: 0.24}   # FC, ESC, companion, camera
-  net_launcher: {mass: 0.370, size: [0.09, 0.09, 0.12],  z: 0.36}   # net + launcher, fires through the nose
+  battery:      {mass: 1.450, size: [0.08, 0.07, 0.22], z: 0.32}   # 6S/8S LiPo pack placed low for CG stability
+  avionics:     {mass: 0.520, size: [0.09, 0.09, 0.08], z: 0.55}   # FC, ESC 4-in-1, companion computer, seeker
+  payload:      {mass: 0.400, size: [0.10, 0.10, 0.12], z: 0.72}   # warhead / net launcher
 
 motors:
+  layout: "x"           # quad X layout (motors at +/- 45 deg)
   count: 4
-  mass: 0.090           # each (90 g)
-  arm_mass: 0.120       # all 4 arms together
-  arm_radius: 0.20      # fuselage axis to motor axis
-  arm_diameter: 0.025
-  z_from_cg: -0.08      # motor plane relative to the CG (negative = towards the tail)
-  prop_diameter_inch: 9 # 9 inch
-  max_thrust_n: 34.33   # 3.5 kgf per motor (3.5 * 9.807 N)
-  motor_constant: 8.54858e-06   # x500 motor model, thrust = k * omega^2
+  mass: 0.110           # each BrotherHobby high-performance motor (~110 g)
+  arm_mass: 0.450       # all 4 wing arms + nacelles + landing legs together
+  arm_radius: 0.25      # 50 cm span between opposite motors (fuselage axis to motor axis = 0.25 m)
+  z_from_cg: 0.04       # motor plane relative to the CG (aligned with top edge of wing)
+  prop_diameter_inch: 10 # 10 inch propeller
+  max_thrust_n: 42.0    # ~4.3 kgf per motor (4 * 42 = 168 N total thrust)
+  motor_constant: 8.54858e-06   # motor model, thrust = k * omega^2
   moment_constant: 0.016
 
-wings:
-  mass: 0.065           # both
-  chord: 0.11           # along the fuselage axis
-  span_out: 0.09        # each plate, from the fuselage surface outwards
-  thickness: 0.005
-  z_from_cg: 0.02       # plate centre relative to the CG
+wings:                  # 4 aerodynamic wing-shaped arms (motor arms ARE the wings)
+  chord: 0.16           # along the fuselage axis (16 cm chord, sized proportionally)
+  thickness: 0.008      # 8 mm aerodynamic foil profile
+  z_from_cg: -0.04      # wing centre (top edge at -0.04 + 0.08 = +0.04 m, flush with motor base)
+  nacelle_radius: 0.024 # motor pod radius
+  nacelle_length: 0.16  # motor pod length matching wing chord
+  leg_length: 0.52      # carbon landing rod length
+  leg_clearance: 0.05   # rods extend 5 cm past the tail end for stable landing
+
+tail_fins:              # 4 cruciform tail fins at the rear
+  mass: 0.120           # all 4 fins together
+  count: 4
+  span_out: 0.09        # from fuselage surface outwards
+  chord: 0.16           # along fuselage axis
+  thickness: 0.006      # fin thickness
+  z_from_tail: 0.04     # attached near the tail end
 
 aero:
-  top_speed: 45.0       # [m/s] level flight at full thrust; the motor model has no thrust loss
-                        # with inflow speed, so extra axial drag is added to match this
-  cd_body_side: 0.9     # fuselage in cross flow
-  cd_body_axial: 0.35
+  top_speed: 45.0       # [m/s] level flight at full thrust (~162 km/h)
+  cd_body_side: 0.85    # fuselage in cross flow
+  cd_body_axial: 0.30
 
-camera:                 # nose camera, streamed on udp 5600 by plugins/camera_stream (window: tools/view.sh)
+camera:                 # nose seeker camera, streamed on udp 5600 by plugins/camera_stream
   enabled: true
   width: 1280
   height: 720
   hfov_deg: 60
   rate: 30
-  detect_port: 15600    # udp port of the target_vision driver, tools/sim_detector.py sends there
+  detect_port: 15600    # udp port of target_vision driver
