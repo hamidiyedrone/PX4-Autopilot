@@ -255,7 +255,8 @@ void TargetVision::handlePacket(const target_vision_detection_s &packet)
 
 		if (los_cam.longerThan(FLT_EPSILON)) {
 			los_cam.normalize();
-			const matrix::Vector3f los_body = _R_body_cam * los_cam;
+			const matrix::Vector3f los_body = (packet.flags & TARGET_VISION_FLAG_BODY_LOS) ?
+							  los_cam : (_R_body_cam * los_cam);
 			los_body.copyTo(detection.los_body);
 
 		} else {
@@ -272,7 +273,9 @@ void TargetVision::handlePacket(const target_vision_detection_s &packet)
 		detection.attitude_valid = packet.flags & TARGET_VISION_FLAG_ATTITUDE;
 
 		if (detection.attitude_valid) {
-			matrix::Quatf q_body_target = matrix::Quatf(_R_body_cam) * matrix::Quatf(packet.q);
+			matrix::Quatf q_body_target = (packet.flags & TARGET_VISION_FLAG_BODY_LOS) ?
+						      matrix::Quatf(packet.q) :
+						      matrix::Quatf(_R_body_cam) * matrix::Quatf(packet.q);
 			q_body_target.normalize();
 			q_body_target.copyTo(detection.q_target);
 		}

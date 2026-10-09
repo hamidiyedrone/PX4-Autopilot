@@ -92,13 +92,14 @@ case "${1:-front}" in
 	xyz)
 		{ is_number "$2" && is_number "$3" && is_number "$4"; } || usage
 		follow "x: $2, y: $3, z: $4" "${5:-talon1718_1}" ;;
-	front|chase|left|right|top|below)
+	front|chase|chase-right|rear-right|left|right|top|below)
 		d="${2:-3}"
 		is_number "${d}" || usage
 
 		case "$1" in
 			front) az=0;    el=6 ;;
 			chase) az=180;  el=17 ;;
+			chase-right|rear-right) az=-135; el=25 ;;
 			left)  az=90;   el=6 ;;
 			right) az=-90;  el=6 ;;
 			top)   az=180;  el=89 ;;

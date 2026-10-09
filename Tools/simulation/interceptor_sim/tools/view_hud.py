@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+from collections import deque
 import math
 import os
 import re
@@ -34,6 +35,8 @@ import cv2
 import numpy as np
 
 from gz.msgs10.clock_pb2 import Clock
+from gz.msgs10.double_pb2 import Double
+from gz.msgs10.double_v_pb2 import Double_V
 from gz.msgs10.image_pb2 import Image as ImageMsg
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
@@ -371,7 +374,7 @@ def draw_bank_scale(img, roll_deg, w, h, s):
     hud_line(img, right, tip)
 
 
-def draw_flight_data(img, tel, sim_t, w, h):
+def draw_flight_data(img, tel, sim_t, w, h, gmb_data=None, fps=None):
     s = h / 720.0
     hb = tel.get("HEARTBEAT", 3.0)
     att = tel.get("ATTITUDE_QUATERNION", 0.5)
@@ -435,12 +438,26 @@ def draw_flight_data(img, tel, sim_t, w, h):
     hud_text(img, armed, (x1, y0 + dy), 0.55 * s, "right")
     hud_text(img, f"{bat}   {gps_s}", (x1, y0 + 2 * dy), 0.5 * s, "right")
 
-    # sim time (top left)
+    # sim time & video fps (top left)
     hud_text(img, f"T {sim_t:7.1f}", (24 * s, 30 * s), 0.5 * s)
+    fps_str = f"FPS {fps:5.1f}" if fps is not None and fps > 0.1 else "FPS   ---"
+    hud_text(img, fps_str, (24 * s, 54 * s), 0.5 * s)
+
+    # gimbal angles relative to forward boresight (top right, 2 lines like bottom left)
+    gmb_yaw = gmb_pitch = None
+    if gmb_data is not None:
+        gmb_yaw = gmb_data.get("yaw")
+        gmb_pitch = gmb_data.get("pitch")
+
+    x_tr = w - 24 * s
+    y_tr = 30 * s
+    dy_tr = 24 * s
+    hud_text(img, "GMB YAW   " + fmt(gmb_yaw, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
+    hud_text(img, "GMB PITCH " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr + dy_tr), 0.55 * s, "right")
 
 
 def draw_hud(img, tracking_data, width, height):
-    """Boresight reticle and target bounding box."""
+    """Boresight reticle, nose indicator and target bounding box."""
     cx, cy = width // 2, height // 2
 
     # Draw center boresight reticle
@@ -451,45 +468,59 @@ def draw_hud(img, tracking_data, width, height):
     cv2.circle(img, (cx, cy), 15, SHADOW, 3, cv2.LINE_AA)
     cv2.circle(img, (cx, cy), 15, HUD, 1, cv2.LINE_AA)
 
+    # Fuselage nose indicator (aircraft waterline symbol where the drone body points)
+    if tracking_data and "boresight" in tracking_data:
+        ub, vb = tracking_data["boresight"]
+        if 0 <= ub < width and 0 <= vb < height:
+            hud_line(img, (ub - 18, vb), (ub - 6, vb))
+            hud_line(img, (ub + 6, vb), (ub + 18, vb))
+            hud_line(img, (ub - 6, vb), (ub, vb - 6))
+            hud_line(img, (ub, vb - 6), (ub + 6, vb))
+
     if not tracking_data or not tracking_data.get("in_front"):
+        return
+
+    range_m = tracking_data.get("range_m")
+    if range_m is None or range_m > 50.0:
         return
 
     u_c = int(tracking_data["u_centre"])
     v_c = int(tracking_data["v_centre"])
     in_fov = tracking_data["in_fov"]
-    locked = tracking_data["locked"]
-
-    # Bright when within max range, dim when tracked further out
-    tgt_color = HUD if locked else HUD_DIM
 
     if in_fov:
         # Faint line-of-sight line from boresight to target
         cv2.line(img, (cx, cy), (u_c, v_c), HUD_DIM, 1, cv2.LINE_AA)
 
-        # 1. Bounding Box around airplane
+        # Bounding Box around airplane
         bbox = tracking_data.get("bbox")
         if bbox:
             u_min, v_min, u_max, v_max = bbox
             w_box = u_max - u_min
             h_box = v_max - v_min
 
-            # Main bounding box
-            cv2.rectangle(img, (u_min, v_min), (u_max, v_max), tgt_color, 1, cv2.LINE_AA)
+            # Main bounding box with shadow for contrast
+            cv2.rectangle(img, (u_min, v_min), (u_max, v_max), SHADOW, 2, cv2.LINE_AA)
+            cv2.rectangle(img, (u_min, v_min), (u_max, v_max), HUD, 1, cv2.LINE_AA)
 
             # Subtle corner brackets
-            corner_len = max(4, min(10, min(w_box, h_box) // 3))
-            # Top-left
-            cv2.line(img, (u_min, v_min), (u_min + corner_len, v_min), tgt_color, 2, cv2.LINE_AA)
-            cv2.line(img, (u_min, v_min), (u_min, v_min + corner_len), tgt_color, 2, cv2.LINE_AA)
-            # Top-right
-            cv2.line(img, (u_max, v_min), (u_max - corner_len, v_min), tgt_color, 2, cv2.LINE_AA)
-            cv2.line(img, (u_max, v_min), (u_max, v_min + corner_len), tgt_color, 2, cv2.LINE_AA)
-            # Bottom-left
-            cv2.line(img, (u_min, v_max), (u_min + corner_len, v_max), tgt_color, 2, cv2.LINE_AA)
-            cv2.line(img, (u_min, v_max), (u_min, v_max - corner_len), tgt_color, 2, cv2.LINE_AA)
-            # Bottom-right
-            cv2.line(img, (u_max, v_max), (u_max - corner_len, v_max), tgt_color, 2, cv2.LINE_AA)
-            cv2.line(img, (u_max, v_max), (u_max, v_max - corner_len), tgt_color, 2, cv2.LINE_AA)
+            corner_len = max(4, min(12, min(w_box, h_box) // 3))
+            for p1, p2 in [
+                ((u_min, v_min), (u_min + corner_len, v_min)),
+                ((u_min, v_min), (u_min, v_min + corner_len)),
+                ((u_max, v_min), (u_max - corner_len, v_min)),
+                ((u_max, v_min), (u_max, v_min + corner_len)),
+                ((u_min, v_max), (u_min + corner_len, v_max)),
+                ((u_min, v_max), (u_min, v_max - corner_len)),
+                ((u_max, v_max), (u_max - corner_len, v_max)),
+                ((u_max, v_max), (u_max, v_max - corner_len)),
+            ]:
+                cv2.line(img, p1, p2, SHADOW, 3, cv2.LINE_AA)
+                cv2.line(img, p1, p2, HUD, 1, cv2.LINE_AA)
+
+            # Target distance under bbox (centered horizontally on the box)
+            u_box_c = (u_min + u_max) // 2
+            hud_text(img, f"{range_m:.1f}m", (u_box_c, v_max + 14), 0.45, "center", color=HUD)
 
 
 def main():
@@ -499,6 +530,7 @@ def main():
     ap.add_argument("--target", default="talon1718_1")
     ap.add_argument("--max-range", type=float, default=50.0)
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14551", help="PX4 HUD link (see the airframe .post)")
+    ap.add_argument("extra_args", nargs="*", help="Optional extra arguments (e.g. port)")
     a = ap.parse_args()
 
     import yaml
@@ -539,7 +571,9 @@ def main():
     tel.start()
 
     node = Node()
-    state = {"poses": {}, "t": 0.0, "last_frame": None, "new_frame": False}
+    state = {"poses": {}, "t": 0.0, "last_frame": None, "new_frame": False,
+             "gmb_yaw": 0.0, "gmb_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
+             "fps": 0.0, "last_frame_time": 0.0}
 
     def on_clock(msg):
         state["t"] = msg.sim.sec + msg.sim.nsec * 1e-9
@@ -549,20 +583,50 @@ def main():
             if p.name in (a.interceptor, a.target):
                 state["poses"][p.name] = p
 
+    def on_gmb_yaw(msg):
+        state["gmb_yaw"] = msg.data
+
+    def on_gmb_pitch(msg):
+        state["gmb_pitch"] = msg.data
+
+    def on_detection(msg):
+        if len(msg.data) >= 6:
+            state["det"] = {
+                "cx": float(msg.data[0]),
+                "cy": float(msg.data[1]),
+                "w": float(msg.data[2]),
+                "h": float(msg.data[3]),
+                "range_m": float(msg.data[4]),
+                "visible": bool(msg.data[5] > 0.5),
+                "time": time.time(),
+            }
+
     def on_image(msg):
         try:
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
             # Gazebo outputs RGB, OpenCV uses BGR
             state["last_frame"] = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
             state["new_frame"] = True
+
+            now = time.time()
+            state["last_frame_time"] = now
+            ft = state["frame_times"]
+            ft.append(now)
+            if len(ft) >= 2:
+                dt = ft[-1] - ft[0]
+                if dt > 0.005:
+                    state["fps"] = (len(ft) - 1) / dt
         except Exception:
             pass
 
     node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
+    node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_yaw", on_gmb_yaw)
+    node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
+    node.subscribe(Double_V, f"/model/{a.interceptor}/detection", on_detection)
 
-    # Discover camera topic
-    cam_topic = f"/world/{a.world}/model/{a.interceptor}/link/base_link/sensor/nose_camera/image"
+    # Discover camera topic (on gimbal_pitch_link or base_link)
+    cam_topic = f"/world/{a.world}/model/{a.interceptor}/link/gimbal_pitch_link/sensor/nose_camera/image"
     node.subscribe(ImageMsg, cam_topic, on_image)
 
     # Also scan active topics to catch any alternate link name
@@ -600,66 +664,143 @@ def main():
 
         # draw on a copy: the same frame is shown again until the next one arrives
         frame = frame.copy()
+        if time.time() - state.get("last_frame_time", 0.0) > 1.0:
+            state["fps"] = 0.0
         pi = state["poses"].get(a.interceptor)
         pt = state["poses"].get(a.target)
 
         tracking_data = {"in_front": False}
+        gmb_data = None
 
-        if pi is not None and pt is not None:
+        if pi is not None:
             R_int = quat_to_rot(pi.orientation.w, pi.orientation.x, pi.orientation.y, pi.orientation.z)
             p_int = np.array([pi.position.x, pi.position.y, pi.position.z])
 
-            R_tgt = quat_to_rot(pt.orientation.w, pt.orientation.x, pt.orientation.y, pt.orientation.z)
-            p_tgt = np.array([pt.position.x, pt.position.y, pt.position.z])
-
+            # Camera position is always at the interceptor nose in world frame
             p_cam_world = p_int + R_int @ cam_offset_body
-            d_world = p_tgt - p_cam_world
-            d_cam_gz = R_cam_gz_body @ (R_int.T @ d_world)
-            d_opt = GZ_TO_OPT @ d_cam_gz
 
-            range_m = float(np.linalg.norm(d_opt))
+            # Gimbal camera orientation from commanded seeker pitch and yaw angles
+            pitch_rad = float(state.get("gmb_pitch", 0.0))
+            yaw_rad = float(state.get("gmb_yaw", 0.0))
+            pitch_deg = math.degrees(pitch_rad)
+            yaw_deg = math.degrees(yaw_rad)
 
-            if d_opt[2] > 0.1:
-                tracking_data["in_front"] = True
-                tracking_data["range_m"] = range_m
-                los = d_opt / range_m
-                tracking_data["los"] = los
+            gmb_data = {
+                "yaw": yaw_deg,
+                "pitch": pitch_deg,
+            }
 
-                u_centre = fx * los[0] / los[2] + cx
-                v_centre = fy * los[1] / los[2] + cy
-                tracking_data["u_centre"] = u_centre
-                tracking_data["v_centre"] = v_centre
+            cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
+            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+            # Relative gimbal rotation in body FLU: yaw around +Z, pitch around transverse +Y
+            R_rel = np.array([
+                [ cy * cp, -sy,  cy * sp],
+                [ sy * cp,  cy,  sy * sp],
+                [    -sp,   0.,      cp ]
+            ])
 
-                in_fov = (0 <= u_centre < width and 0 <= v_centre < height)
-                tracking_data["in_fov"] = in_fov
-                tracking_data["locked"] = (range_m <= a.max_range and in_fov)
+            # Camera orientation in world frame = vehicle body attitude * gimbal relative rotation
+            R_cam = R_int @ R_rel
 
-                # Camera optical frame in world
-                R_cam_opt_world = GZ_TO_OPT @ R_cam_gz_body @ R_int.T
+            # Camera optical frame in world (takes world vectors into camera optical coords)
+            R_cam_opt_world = GZ_TO_OPT @ R_cam_gz_body @ R_cam.T
 
-                # Bounding box from vertices relative to camera
-                if talon_pts is not None:
-                    pts_world = (R_tgt @ talon_pts.T).T + p_tgt
-                    pts_rel_world = pts_world - p_cam_world
-                    pts_cam = (R_cam_opt_world @ pts_rel_world.T).T
+            # Project vehicle fuselage centerline (nose +z in body FLU) into camera optical frame
+            n_body_world = R_int @ np.array([0., 0., 1.])
+            n_body_cam = R_cam_opt_world @ n_body_world
+            if n_body_cam[2] > 0.05:
+                u_bore = fx * n_body_cam[0] / n_body_cam[2] + cx
+                v_bore = fy * n_body_cam[1] / n_body_cam[2] + cy
+                tracking_data["boresight"] = (int(u_bore), int(v_bore))
 
-                    in_front_pts = pts_cam[:, 2] > 0.1
-                    if np.any(in_front_pts):
-                        pts_f = pts_cam[in_front_pts]
-                        u_pts = fx * pts_f[:, 0] / pts_f[:, 2] + cx
-                        v_pts = fy * pts_f[:, 1] / pts_f[:, 2] + cy
-                        u_min = int(np.clip(np.floor(u_pts.min()), 0, width - 1))
-                        u_max = int(np.clip(np.ceil(u_pts.max()), 0, width - 1))
-                        v_min = int(np.clip(np.floor(v_pts.min()), 0, height - 1))
-                        v_max = int(np.clip(np.ceil(v_pts.max()), 0, height - 1))
-                        if u_max - u_min > 2 and v_max - v_min > 2:
+            det = state.get("det")
+            now = time.time()
+            det_active = (det is not None and (now - det.get("time", 0.0) < 0.6) and det.get("visible"))
+
+            if det_active:
+                if det["range_m"] <= a.max_range:
+                    cx_px = int(det["cx"] * width)
+                    cy_px = int(det["cy"] * height)
+                    w_px = max(10, int(det["w"] * width))
+                    h_px = max(8, int(det["h"] * height))
+                    u_min = int(np.clip(cx_px - w_px // 2, 0, width - 1))
+                    u_max = int(np.clip(cx_px + w_px // 2, 0, width - 1))
+                    v_min = int(np.clip(cy_px - h_px // 2, 0, height - 1))
+                    v_max = int(np.clip(cy_px + h_px // 2, 0, height - 1))
+
+                    tracking_data["in_front"] = True
+                    tracking_data["range_m"] = det["range_m"]
+                    tracking_data["u_centre"] = cx_px
+                    tracking_data["v_centre"] = cy_px
+                    tracking_data["in_fov"] = (0 <= cx_px < width and 0 <= cy_px < height)
+                    tracking_data["locked"] = True
+                    tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
+            elif pt is not None:
+                # Geometric projection fallback from ground truth poses
+                R_tgt = quat_to_rot(pt.orientation.w, pt.orientation.x, pt.orientation.y, pt.orientation.z)
+                p_tgt = np.array([pt.position.x, pt.position.y, pt.position.z])
+
+                d_world = p_tgt - p_cam_world
+                d_cam_gz = R_cam_gz_body @ (R_cam.T @ d_world)
+                d_opt = GZ_TO_OPT @ d_cam_gz
+
+                range_m = float(np.linalg.norm(d_opt))
+
+                if d_opt[2] > 0.1 and range_m <= a.max_range:
+                    tracking_data["in_front"] = True
+                    tracking_data["range_m"] = range_m
+                    los = d_opt / range_m
+                    tracking_data["los"] = los
+
+                    u_centre = fx * los[0] / los[2] + cx
+                    v_centre = fy * los[1] / los[2] + cy
+                    tracking_data["u_centre"] = u_centre
+                    tracking_data["v_centre"] = v_centre
+
+                    in_fov = (0 <= u_centre < width and 0 <= v_centre < height)
+                    tracking_data["in_fov"] = in_fov
+                    tracking_data["locked"] = (range_m <= a.max_range and in_fov)
+
+                    # Bounding box from vertices relative to camera
+                    if talon_pts is not None:
+                        pts_world = (R_tgt @ talon_pts.T).T + p_tgt
+                        pts_rel_world = pts_world - p_cam_world
+                        pts_cam = (R_cam_opt_world @ pts_rel_world.T).T
+
+                        in_front_pts = pts_cam[:, 2] > 0.1
+                        if np.any(in_front_pts):
+                            pts_f = pts_cam[in_front_pts]
+                            u_pts = fx * pts_f[:, 0] / pts_f[:, 2] + cx
+                            v_pts = fy * pts_f[:, 1] / pts_f[:, 2] + cy
+                            u_raw_min = np.floor(u_pts.min() - 2)
+                            u_raw_max = np.ceil(u_pts.max() + 2)
+                            v_raw_min = np.floor(v_pts.min() - 2)
+                            v_raw_max = np.ceil(v_pts.max() + 2)
+                            w_box = max(10, int(u_raw_max - u_raw_min))
+                            h_box = max(8, int(v_raw_max - v_raw_min))
+                            u_c = int((u_raw_min + u_raw_max) / 2)
+                            v_c = int((v_raw_min + v_raw_max) / 2)
+                            u_min = int(np.clip(u_c - w_box // 2, 0, width - 1))
+                            u_max = int(np.clip(u_c + w_box // 2, 0, width - 1))
+                            v_min = int(np.clip(v_c - h_box // 2, 0, height - 1))
+                            v_max = int(np.clip(v_c + h_box // 2, 0, height - 1))
                             tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
+
+                    # Fallback bounding box if mesh vertices not available
+                    if "bbox" not in tracking_data and in_fov and range_m > 0.1:
+                        w_px = max(10, int(fx * 1.72 / range_m))
+                        h_px = max(8, int(fy * 0.80 / range_m))
+                        u_min = int(np.clip(u_centre - w_px // 2, 0, width - 1))
+                        u_max = int(np.clip(u_centre + w_px // 2, 0, width - 1))
+                        v_min = int(np.clip(v_centre - h_px // 2, 0, height - 1))
+                        v_max = int(np.clip(v_centre + h_px // 2, 0, height - 1))
+                        tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
 
         # Render HUD onto frame
         h_img, w_img = frame.shape[:2]
 
         if show_flight_data:
-            draw_flight_data(frame, tel, state["t"], w_img, h_img)
+            draw_flight_data(frame, tel, state["t"], w_img, h_img, gmb_data, state.get("fps", 0.0))
 
         draw_hud(frame, tracking_data, width, height)
         cv2.imshow(window_name, frame)

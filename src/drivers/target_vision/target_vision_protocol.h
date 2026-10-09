@@ -44,6 +44,7 @@
 #define TARGET_VISION_FLAG_DETECTED	(1 << 0)	// a target was found, the fields below are valid
 #define TARGET_VISION_FLAG_RANGE	(1 << 1)	// range_m, range_sigma_m are valid
 #define TARGET_VISION_FLAG_ATTITUDE	(1 << 2)	// q is valid
+#define TARGET_VISION_FLAG_BODY_LOS	(1 << 3)	// los and q are already expressed in vehicle body FRD frame (e.g. from gimballed seeker)
 
 #define TARGET_VISION_PACKET_SIZE	70u
 #define TARGET_VISION_PAYLOAD_SIZE	64u
