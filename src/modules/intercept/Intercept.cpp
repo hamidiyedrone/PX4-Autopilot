@@ -304,11 +304,11 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
 	const float K_z_p = _param_int_kp_z_app.get();
-	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -3.0f, 2.5f);
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.5f, 3.5f);
 
-	// Slew-rate limit vertical velocity (max 2.0 m/s^2 acceleration) to prevent pitch hunting
+	// Slew-rate limit vertical velocity (max 5.0 m/s^2 acceleration) to rapidly match altitude
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dvz = 2.0f * dt;
+		const float max_dvz = 5.0f * dt;
 		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
 	} else {
 		vel_cmd(2) = vz_desired;

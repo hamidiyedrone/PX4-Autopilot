@@ -25,6 +25,7 @@ Mirrored wire format: src/drivers/target_vision/target_vision_protocol.h
 import argparse
 import math
 import os
+import queue
 import re
 import socket
 import struct
@@ -34,6 +35,7 @@ import numpy as np
 from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.double_pb2 import Double
 from gz.msgs10.double_v_pb2 import Double_V
+from gz.msgs10.image_pb2 import Image as ImageMsg
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
@@ -150,8 +152,8 @@ def main():
                     help="target model name in Gazebo")
     ap.add_argument("--port", type=int, default=15600,
                     help="UDP port of the target_vision driver")
-    ap.add_argument("--rate", type=float, default=30.0,
-                    help="detection rate [Hz]")
+    ap.add_argument("--rate", type=float, default=0.0,
+                    help="detection rate [Hz], default 0 = frame-driven (every camera frame)")
     ap.add_argument("--max-range", type=float, default=75.0,
                     help="max detection range [m]")
     ap.add_argument("--hfov", type=float, default=None,
@@ -245,10 +247,34 @@ def main():
         pub_gimbal_pitch = None
         yaw_limit = pitch_limit = 0.0
 
+    # Camera image subscription (frame-driven detection)
+    frame_queue = queue.Queue(maxsize=1)
+    camera_active = [False]
+
+    def on_image(msg):
+        camera_active[0] = True
+        t_img = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
+        if t_img <= 0:
+            t_img = state["t"]
+        if frame_queue.full():
+            try:
+                frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            frame_queue.put_nowait((t_img, msg.width, msg.height))
+        except queue.Full:
+            pass
+
+    cam_link = "gimbal_pitch_link" if gimbal_enabled else "base_link"
+    cam_topic = f"/world/{a.world}/model/{a.interceptor}/link/{cam_link}/sensor/nose_camera/image"
+    node.subscribe(ImageMsg, cam_topic, on_image)
+
     pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
+    rate_desc = f"{a.rate:.0f} Hz" if a.rate > 0 else "frame-driven (unbounded)"
     print(f"sim_detector: {a.interceptor} camera → {a.target}, "
-          f"udp {a.port}, {a.rate:.0f} Hz, max range {a.max_range:.0f} m, "
+          f"udp {a.port}, {rate_desc}, max range {a.max_range:.0f} m, "
           f"FOV {hfov:.0f}°×{math.degrees(vfov_rad):.0f}°, "
           f"{width}×{height}")
 
@@ -257,8 +283,17 @@ def main():
         time.sleep(0.1)
     print("Both models found, starting detection loop", flush=True)
 
+    # Scan active topics to discover camera topic if link name differs
+    for t in node.topic_list():
+        if "nose_camera" in t and t.endswith("/image"):
+            if t != cam_topic:
+                cam_topic = t
+                node.subscribe(ImageMsg, cam_topic, on_image)
+            break
+
     frame_id = 0
-    dt = 1.0 / a.rate
+    fallback_rate = a.rate if a.rate > 0 else 60.0
+    dt_fallback = 1.0 / fallback_rate
     last_send = 0.0
     last_sim_time = 0.0
     last_print = 0.0
@@ -274,13 +309,29 @@ def main():
     last_seen_time = 0.0
 
     while True:
-        time.sleep(0.002)
-        t_sim = state["t"]
+        if a.rate > 0:
+            time.sleep(0.001)
+            t_sim = state["t"]
+            if t_sim - last_send < dt_fallback:
+                continue
+            fw, fh = width, height
+        elif camera_active[0]:
+            try:
+                t_sim, fw, fh = frame_queue.get(timeout=0.05)
+            except queue.Empty:
+                t_sim = state["t"]
+                fw, fh = width, height
+                if t_sim - last_send < dt_fallback:
+                    time.sleep(0.001)
+                    continue
+        else:
+            time.sleep(0.001)
+            t_sim = state["t"]
+            if t_sim - last_send < dt_fallback:
+                continue
+            fw, fh = width, height
 
-        if t_sim - last_send < dt:
-            continue
-
-        dt_step = max(0.001, min(0.1, t_sim - last_sim_time)) if last_sim_time > 0 else dt
+        dt_step = max(0.0005, min(0.1, t_sim - last_sim_time)) if last_sim_time > 0 else 0.016
         last_sim_time = t_sim
         last_send = t_sim
         frame_id += 1
@@ -376,8 +427,8 @@ def main():
         u_centre = fx * los[0] / los[2] + cx
         v_centre = fy * los[1] / los[2] + cy
 
-        # generous FOV check (target centre within 1.2× the image)
-        margin = 1.2
+        # generous FOV check (target centre within 1.5× the image)
+        margin = 1.5
         in_fov = (-width * (margin - 1) / 2 < u_centre < width * margin
                   and -height * (margin - 1) / 2 < v_centre < height * margin)
 
@@ -422,21 +473,33 @@ def main():
                 pts_f = pts_cam[in_front]
                 u_raw = fx * pts_f[:, 0] / pts_f[:, 2] + cx
                 v_raw = fy * pts_f[:, 1] / pts_f[:, 2] + cy
-                # the whole silhouette must be in the image: a target cut by the edge is not visible
-                inside = (u_raw.min() >= 0 and u_raw.max() <= width and
-                          v_raw.min() >= 0 and v_raw.max() <= height)
-                u = np.clip(u_raw, 0, width)
-                v = np.clip(v_raw, 0, height)
-                u_min, u_max = u.min(), u.max()
-                v_min, v_max = v.min(), v.max()
-                bw, bh = u_max - u_min, v_max - v_min
-                if bw > 0.5 and bh > 0.5 and inside:
+                # Unclipped bounding box of the full target
+                u_raw_min, u_raw_max = float(u_raw.min()), float(u_raw.max())
+                v_raw_min, v_raw_max = float(v_raw.min()), float(v_raw.max())
+                bw_raw = u_raw_max - u_raw_min
+                bh_raw = v_raw_max - v_raw_min
+                raw_area = bw_raw * bh_raw
+
+                # Clipped bounding box within the image frame [0, width] x [0, height]
+                u_clip_min = max(0.0, u_raw_min)
+                u_clip_max = min(float(width), u_raw_max)
+                v_clip_min = max(0.0, v_raw_min)
+                v_clip_max = min(float(height), v_raw_max)
+                bw_clip = max(0.0, u_clip_max - u_clip_min)
+                bh_clip = max(0.0, v_clip_max - v_clip_min)
+                vis_area = bw_clip * bh_clip
+
+                # Rule: Detection is lost if more than 1/3 of the target (bbox)
+                # is outside the image (i.e. at least 2/3 (66.7%) of bbox area remains inside).
+                vis_ratio = (vis_area / raw_area) if raw_area > 0 else 0.0
+
+                if bw_clip > 0.5 and bh_clip > 0.5 and vis_ratio >= (2.0 / 3.0):
                     visible = True
                     bbox = [
-                        float((u_min + u_max) / 2 / width),   # cx normalised
-                        float((v_min + v_max) / 2 / height),  # cy normalised
-                        float(bw / width),                     # w normalised
-                        float(bh / height),                    # h normalised
+                        float((u_clip_min + u_clip_max) / 2.0 / width),   # cx normalised [0, 1]
+                        float((v_clip_min + v_clip_max) / 2.0 / height),  # cy normalised [0, 1]
+                        float(bw_clip / width),                           # w normalised
+                        float(bh_clip / height),                          # h normalised
                     ]
                     last_visible = True
                     last_bbox = bbox
@@ -483,7 +546,8 @@ def main():
 
         # periodic status
         if t_sim - last_print >= 5.0:
-            print(f"t={t_sim:7.1f}  range {range_m:6.1f} m  "
+            mode_str = "cam-frame" if camera_active[0] else "timer"
+            print(f"t={t_sim:7.1f}  [{mode_str}]  range {range_m:6.1f} m  "
                   f"los [{los[0]:+.2f} {los[1]:+.2f} {los[2]:+.2f}]  "
                   f"bbox [{bbox[0]:.2f} {bbox[1]:.2f} {bbox[2]:.3f} {bbox[3]:.3f}]  "
                   f"frames {frame_id}", flush=True)

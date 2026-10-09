@@ -64,7 +64,7 @@ camera:                 # nose seeker camera, streamed on udp 5600 by plugins/ca
   width: 800
   height: 450
   hfov_deg: 60
-  rate: 60
+  rate: 60              # 60 FPS camera capture (keeps RTF high and stable)
   detect_port: 15600    # udp port of target_vision driver
 
 gimbal:                 # 2-axis nose seeker gimbal (yaw +/-45 deg, pitch +/-45 deg)
