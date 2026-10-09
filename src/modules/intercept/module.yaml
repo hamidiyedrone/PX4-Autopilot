@@ -90,3 +90,13 @@ parameters:
             min: 5.0
             max: 60.0
             decimal: 1
+
+        INT_K_CORNER:
+            description:
+                short: Adaptive corner braking gain
+                long: Proportional braking gain on (target_size * lateral_drift) reducing forward speed during turns.
+            type: float
+            default: 10.0
+            min: 0.0
+            max: 30.0
+            decimal: 1

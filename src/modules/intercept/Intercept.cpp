@@ -412,12 +412,25 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		}
 	}
 
+	// Adaptive maneuver corner braking:
+	// If target drifts towards FOV edges beyond +/- 0.10 deadband ([0.40, 0.60]),
+	// gently brake forward speed proportionally to (size * lateral_drift) to tighten turn radius
+	const float lat_offset = fabsf(cx - 0.50f);
+	constexpr float LAT_BRAKE_DEADBAND = 0.10f; // +/- 0.10 deadband corridor
+	float corner_brake = 0.0f;
+	if (lat_offset > LAT_BRAKE_DEADBAND) {
+		const float lat_drift = lat_offset - LAT_BRAKE_DEADBAND;
+		const float k_corner = _param_int_k_corner.get();
+		corner_brake = math::constrain(k_corner * w * lat_drift, 0.0f, 3.0f);
+	}
+	delta_v -= corner_brake;
+
 	// Clamp commanded velocity delta to prevent abrupt pitch swings
-	delta_v = math::constrain(delta_v, -4.0f, 5.0f);
+	delta_v = math::constrain(delta_v, -5.0f, 5.0f);
 
 	// Desired forward speed is referenced to vehicle's OWN actual ground speed
-	// Eliminates the double-integrator limit cycle without assuming target speed is known or constant!
-	const float desired_fwd_speed = math::constrain(current_fwd_speed + delta_v, 15.0f, 45.0f);
+	// Multicopter has no stall speed: allow slowing all the way down to hover (0.0 m/s) if needed during sharp maneuvers!
+	const float desired_fwd_speed = math::constrain(current_fwd_speed + delta_v, 0.0f, 45.0f);
 
 	// Slew-rate limit forward speed command matching MPC_ACC_HOR for smooth aerodynamic pitch transitions
 	const float prev_speed_cmd = _fwd_speed_cmd;
