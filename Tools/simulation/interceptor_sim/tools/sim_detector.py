@@ -32,6 +32,8 @@ import time
 
 import numpy as np
 from gz.msgs10.clock_pb2 import Clock
+from gz.msgs10.double_pb2 import Double
+from gz.msgs10.double_v_pb2 import Double_V
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
@@ -50,6 +52,7 @@ CRC_LENGTH = 66  # from version to end of bbox (66 bytes)
 FLAG_DETECTED = 1 << 0
 FLAG_RANGE    = 1 << 1
 FLAG_ATTITUDE = 1 << 2
+FLAG_BODY_LOS = 1 << 3
 
 
 def crc16_ccitt(data: bytes, init: int = 0xFFFF) -> int:
@@ -217,6 +220,8 @@ def main():
         for p in msg.pose:
             if p.name in (a.interceptor, a.target):
                 state["poses"][p.name] = p
+            elif "gimbal_pitch_link" in p.name:
+                state["poses"]["gimbal_pitch_link"] = p
 
     node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
@@ -224,6 +229,23 @@ def main():
     # UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = ("127.0.0.1", a.port)
+
+    # 2-axis gimbal setup
+    gimbal_cfg = cfg.get("gimbal", {})
+    gimbal_enabled = gimbal_cfg.get("enabled", False)
+    if gimbal_enabled:
+        pub_gimbal_yaw = node.advertise(f"/model/{a.interceptor}/command/seeker_yaw", Double)
+        pub_gimbal_pitch = node.advertise(f"/model/{a.interceptor}/command/seeker_pitch", Double)
+        yaw_limit = math.radians(gimbal_cfg.get("yaw_limit_deg", 45))
+        pitch_limit = math.radians(gimbal_cfg.get("pitch_limit_deg", 45))
+        print(f"sim_detector: 2-axis seeker gimbal active (+/-{math.degrees(yaw_limit):.0f}° yaw, "
+              f"+/-{math.degrees(pitch_limit):.0f}° pitch)")
+    else:
+        pub_gimbal_yaw = None
+        pub_gimbal_pitch = None
+        yaw_limit = pitch_limit = 0.0
+
+    pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
     print(f"sim_detector: {a.interceptor} camera → {a.target}, "
           f"udp {a.port}, {a.rate:.0f} Hz, max range {a.max_range:.0f} m, "
@@ -238,7 +260,18 @@ def main():
     frame_id = 0
     dt = 1.0 / a.rate
     last_send = 0.0
+    last_sim_time = 0.0
     last_print = 0.0
+
+    # 2-Axis Kinematic Seeker Gimbal state (physical rate limits)
+    gmb_psi = 0.0      # current yaw / azimuth angle [rad]
+    gmb_theta = 0.0    # current pitch / elevation angle [rad]
+    # Physical maximum slew rate (default 90 deg/s)
+    max_rate_rad = math.radians(gimbal_cfg.get("max_rate_deg_s", 90.0))
+    # Optical visual servoing tracking state
+    last_visible = False
+    last_bbox = None
+    last_seen_time = 0.0
 
     while True:
         time.sleep(0.002)
@@ -247,6 +280,8 @@ def main():
         if t_sim - last_send < dt:
             continue
 
+        dt_step = max(0.001, min(0.1, t_sim - last_sim_time)) if last_sim_time > 0 else dt
+        last_sim_time = t_sim
         last_send = t_sim
         frame_id += 1
 
@@ -267,12 +302,56 @@ def main():
                             pt.orientation.y, pt.orientation.z)
         p_tgt = np.array([pt.position.x, pt.position.y, pt.position.z])
 
-        # camera position in world
-        p_cam_world = p_int + R_int @ cam_offset_body
+        # Relative target vector from interceptor nose
+        p_nose_world = p_int + R_int @ cam_offset_body
+        d_tgt_world = p_tgt - p_nose_world
+        d_tgt_body = R_int.T @ d_tgt_world  # FLU (+x fwd, +y left, +z up nose)
+        dist_tgt = float(np.linalg.norm(d_tgt_body))
+
+        # Kinematic Seeker Gimbal: Pitch-Only Active Tracking (Yaw locked to 0 boresight)
+        if gimbal_enabled and pub_gimbal_yaw is not None and pub_gimbal_pitch is not None:
+            # 1. Yaw axis locked firmly to 0 boresight (azimuth handled by drone heading)
+            gmb_psi = 0.0
+            msg_y = Double()
+            msg_y.data = 0.0
+            pub_gimbal_yaw.publish(msg_y)
+
+            # 2. Pitch axis active tracking: points camera optical axis directly at target in body elevation plane
+            if dist_tgt > 0.5:
+                theta_desired = float(np.clip(math.atan2(d_tgt_body[0], d_tgt_body[2]), -pitch_limit, pitch_limit))
+            else:
+                # Target lost: smoothly return to neutral 0 boresight
+                theta_desired = 0.0
+
+            # Enforce physical maximum angular velocity (slew-rate limiter <= 90 deg/s)
+            max_delta = max_rate_rad * dt_step
+            d_theta = float(np.clip(theta_desired - gmb_theta, -max_delta, max_delta))
+
+            # Exponential low-pass smoothing (critically damped servo response, tau ~ 0.06s)
+            alpha = 1.0 - math.exp(-dt_step / 0.06)
+            gmb_theta += d_theta * (0.4 + 0.6 * alpha)
+
+            msg_p = Double()
+            msg_p.data = gmb_theta
+            pub_gimbal_pitch.publish(msg_p)
+
+        # camera pose in world (strictly at drone nose, oriented by pitch gimbal angle)
+        p_cam_world = p_nose_world
+
+        if gimbal_enabled:
+            cp, sp = math.cos(gmb_theta), math.sin(gmb_theta)
+            R_rel = np.array([
+                [ cp,  0.,  sp],
+                [ 0.,  1.,  0.],
+                [-sp,  0.,  cp]
+            ])
+            R_cam = R_int @ R_rel
+        else:
+            R_cam = R_int
 
         # target relative to camera, in gz-camera frame
         d_world = p_tgt - p_cam_world
-        d_cam_gz = R_cam_gz_body @ (R_int.T @ d_world)
+        d_cam_gz = R_cam_gz_body @ (R_cam.T @ d_world)
 
         # convert to camera optical frame
         d_opt = GZ_TO_OPT @ d_cam_gz  # [x_right, y_down, z_forward]
@@ -281,9 +360,13 @@ def main():
 
         # check: target must be in front of the camera and within range
         if d_opt[2] <= 0 or range_m > a.max_range or range_m < 0.1:
+            last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
             sock.sendto(pkt, dest)
+            msg_det = Double_V()
+            msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
+            pub_detection.publish(msg_det)
             continue
 
         # line of sight: unit vector camera → target in optical frame
@@ -299,9 +382,13 @@ def main():
                   and -height * (margin - 1) / 2 < v_centre < height * margin)
 
         if not in_fov:
+            last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
             sock.sendto(pkt, dest)
+            msg_det = Double_V()
+            msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
+            pub_detection.publish(msg_det)
             continue
 
         # --- target is visible ---
@@ -316,7 +403,7 @@ def main():
 
         # camera optical frame axes in world:
         # R_cam_opt_world takes world vectors into optical frame
-        R_cam_opt_world = GZ_TO_OPT @ R_cam_gz_body @ R_int.T
+        R_cam_opt_world = GZ_TO_OPT @ R_cam_gz_body @ R_cam.T
 
         # target attitude in camera optical frame
         R_target_in_cam = R_cam_opt_world @ R_tgt_frd
@@ -351,25 +438,48 @@ def main():
                         float(bw / width),                     # w normalised
                         float(bh / height),                    # h normalised
                     ]
+                    last_visible = True
+                    last_bbox = bbox
+                    last_seen_time = t_sim
 
         if not visible:
+            last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
             sock.sendto(pkt, dest)
+            msg_det = Double_V()
+            msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
+            pub_detection.publish(msg_det)
             continue
 
-        flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
+        if gimbal_enabled:
+            # Line-of-sight in vehicle body FRD frame
+            d_frd = np.array([d_tgt_body[0], -d_tgt_body[1], -d_tgt_body[2]])
+            los_out = (d_frd / dist_tgt).tolist()
+            # Target attitude in vehicle body FRD frame
+            R_body_frd = R_int @ R_flu_to_frd
+            R_target_in_body = R_body_frd.T @ R_tgt_frd
+            q_out = list(rot_to_quat(R_target_in_body))
+            flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE | FLAG_BODY_LOS
+        else:
+            los_out = [float(los[0]), float(los[1]), float(los[2])]
+            q_out = [float(q[0]), float(q[1]), float(q[2]), float(q[3])]
+            flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
+
         confidence = 255  # perfect detection
         range_sigma = 0.1  # negligible uncertainty for ground truth
 
         pkt = pack_packet(
             frame_id, 0, flags, confidence,
-            [float(los[0]), float(los[1]), float(los[2])],
+            los_out,
             float(range_m), range_sigma,
-            [float(q[0]), float(q[1]), float(q[2]), float(q[3])],
+            q_out,
             bbox
         )
         sock.sendto(pkt, dest)
+        msg_det = Double_V()
+        msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_m), 1.0])
+        pub_detection.publish(msg_det)
 
         # periodic status
         if t_sim - last_print >= 5.0:

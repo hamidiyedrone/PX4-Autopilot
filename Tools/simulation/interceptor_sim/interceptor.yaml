@@ -61,8 +61,17 @@ aero:
 
 camera:                 # nose seeker camera, streamed on udp 5600 by plugins/camera_stream
   enabled: true
-  width: 1280
-  height: 720
+  width: 800
+  height: 450
   hfov_deg: 60
-  rate: 30
+  rate: 60
   detect_port: 15600    # udp port of target_vision driver
+
+gimbal:                 # 2-axis nose seeker gimbal (yaw +/-45 deg, pitch +/-45 deg)
+  enabled: true
+  yaw_limit_deg: 45     # azimuth/pan rotation around fuselage z axis (+/-45 deg)
+  pitch_limit_deg: 45   # elevation/tilt rotation around transverse y axis (+/-45 deg)
+  mass: 0.160           # total gimbal mass (yaw + pitch assemblies, kg)
+  p_gain: 6.0
+  i_gain: 0.8
+  d_gain: 0.08

@@ -60,8 +60,8 @@ class Intercept : public ModuleBase<Intercept>, public ModuleParams, public px4:
 {
 public:
 	enum class GuidanceState : uint8_t {
-		MIDCOURSE_GPS = 0,
-		TERMINAL_VISUAL = 1
+		APPROACH = 0,       // Midcourse GPS approach towards target (lead pursuit to visual acquisition range)
+		CLOSE_PURSUIT = 1   // Terminal visual servoing & station-keeping behind target (IBVS)
 	};
 
 	Intercept();
@@ -90,8 +90,8 @@ private:
 	void ReplyToArmingCheck(uint8_t request_id);
 	void UpdateTarget();
 	void UpdateVisualDetection();
-	void ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
-	void ComputeTerminalVisualGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -122,7 +122,7 @@ private:
 	matrix::Vector3f _hold_position{};
 	float _hold_yaw{0.f};
 
-	GuidanceState _guidance_state{GuidanceState::MIDCOURSE_GPS};
+	GuidanceState _guidance_state{GuidanceState::APPROACH};
 	vehicle_attitude_s _vehicle_attitude{};
 	vehicle_local_position_s _local_pos{};
 
@@ -133,41 +133,48 @@ private:
 	bool _target_pos_valid{false};
 	hrt_abstime _last_target_update{0};
 
-	// Visual detection state from nose camera (target_detection)
+	// Visual detection state from seeker camera (target_detection)
 	target_detection_s _target_detection{};
 	bool _visual_contact{false};
 	float _visual_range{0.f};
 	hrt_abstime _last_visual_contact{0};
-	hrt_abstime _terminal_start_time{0};
 
 	// Coasting velocity and yaw during visual frame drops
 	matrix::Vector3f _last_vel_cmd{};
 	float _last_yaw_cmd{0.f};
 	bool _last_cmd_valid{false};
 
-	// Pure visual servoing states and optical derivative damping
+	// Continuous forward speed and acceleration state (unified across APPROACH & CLOSE_PURSUIT)
+	float _fwd_speed_cmd{45.f};
+	float _fwd_accel_cmd{0.f};
+	bool _speed_initialized{false};
+
+	// Optical looming state (IBVS PD)
+	float _last_w{0.50f};
 	float _last_cx{0.5f};
 	float _last_cy{0.5f};
-	float _last_y_top{0.5f};
-	float _last_w{0.22f};
 	float _filt_d_w_dt{0.f};
-	float _filt_d_ytop_dt{0.f};
-	float _filt_d_x_dt{0.f};
-	float _adaptive_base_speed{0.f};
-	bool _speed_initialized{false};
 	hrt_abstime _last_visual_time{0};
 
-	// Net deployment & target lock state
-	bool _target_locked{false};
-	hrt_abstime _lock_start_time{0};
-	bool _net_deployed{false};
+	// Approach guidance closing rate state
+	float _last_approach_dist{-1.f};
+	float _filt_closing_speed{0.f};
+	hrt_abstime _last_approach_time{0};
+
+	// Line-of-sight unit vector in inertial NED frame
+	matrix::Vector3f _last_los_ned{};
+	bool _los_ned_valid{false};
 
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
 		(ParamFloat<px4::params::INT_TGT_SIZE>) _param_int_tgt_size,
-		(ParamFloat<px4::params::INT_TGT_YTOP>) _param_int_tgt_ytop,
-		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
+		(ParamFloat<px4::params::INT_MIN_CLOSING>) _param_int_min_closing,
+		(ParamFloat<px4::params::INT_KP_OPT>) _param_int_kp_opt,
+		(ParamFloat<px4::params::INT_KD_OPT>) _param_int_kd_opt,
+		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
 		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
-		(ParamFloat<px4::params::INT_K_CLIMB>) _param_int_k_climb
+		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
+		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
+		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate
 	)
 };

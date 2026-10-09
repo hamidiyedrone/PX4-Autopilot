@@ -15,47 +15,78 @@ parameters:
                 short: Desired target bounding box width
                 long: Normalized screen width fraction of target for terminal standoff (0.10 to 0.70).
             type: float
-            default: 0.20
+            default: 0.50
             min: 0.10
             max: 0.70
             decimal: 2
 
-        INT_TGT_YTOP:
+        INT_MIN_CLOSING:
             description:
-                short: Desired target bounding box top edge Y position
-                long: Normalized screen Y position for target top edge (0.50 aligns with horizon/tail).
+                short: Minimum closing speed in position guidance
+                long: Minimum relative closing speed (m/s) maintained in midcourse position approach guidance.
             type: float
-            default: 0.50
-            min: 0.20
-            max: 0.80
+            default: 6.0
+            min: 2.0
+            max: 15.0
+            decimal: 1
+
+        INT_KP_OPT:
+            description:
+                short: Optical size error drive gain
+                long: Proportional acceleration gain on normalized size error commanding forward pursuit.
+            type: float
+            default: 1.2
+            min: 0.5
+            max: 15.0
+            decimal: 1
+
+        INT_KD_OPT:
+            description:
+                short: Optical expansion braking damper gain
+                long: Derivative braking damper gain on optical divergence (dw/w) preventing collision.
+            type: float
+            default: 8.0
+            min: 2.0
+            max: 80.0
+            decimal: 1
+
+
+        INT_KP_LAT:
+            description:
+                short: Proportional gain for lateral visual tracking
+                long: Proportional gain (m/s per unit screen error cx - 0.5) for centering target horizontally.
+            type: float
+            default: 2.8
+            min: 0.5
+            max: 15.0
             decimal: 2
 
         INT_KP_Z:
             description:
                 short: Proportional gain for vertical visual tracking
-                long: Proportional gain (m/s per unit screen error) for vertical alignment.
+                long: Proportional gain (m/s per unit screen error cy - 0.5) for centering target vertically.
             type: float
-            default: 6.0
+            default: 2.2
             min: 0.5
             max: 15.0
             decimal: 2
 
-        INT_KP_LAT:
+        INT_KP_Z_APP:
             description:
-                short: Proportional gain for lateral visual tracking
-                long: Proportional gain (m/s per unit screen error) for tail-axis roll alignment.
+                short: Approach mode altitude tracking proportional gain
+                long: Proportional gain (m/s per meter altitude error) for midcourse approach altitude tracking.
             type: float
-            default: 6.0
-            min: 0.5
-            max: 15.0
+            default: 0.8
+            min: 0.1
+            max: 3.0
             decimal: 2
 
-        INT_K_CLIMB:
+        INT_YAW_RATE:
             description:
-                short: Climb priority forward speed reduction gain
-                long: Dynamic forward speed reduction gain when climbing towards target.
+                short: Maximum heading slew rate
+                long: Maximum heading change rate (deg/s) in intercept pursuit guidance.
             type: float
-            default: 16.5
-            min: 0.0
-            max: 30.0
+            default: 42.0
+            min: 5.0
+            max: 60.0
             decimal: 1

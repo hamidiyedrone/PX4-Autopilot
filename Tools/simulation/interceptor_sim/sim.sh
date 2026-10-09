@@ -238,7 +238,17 @@ if [ "${INTERCEPTOR}" != "0" ]; then
 fi
 
 if [ "${VIEW:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
-	${PDEATH} "${SCRIPT_DIR}/tools/view.sh" > /dev/null 2>&1 &
+	${PDEATH} "${SCRIPT_DIR}/tools/view.sh" --world "${WORLD}" --interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" > /dev/null 2>&1 &
+fi
+
+# Track the interceptor in the Gazebo GUI camera from the upper right rear
+if [ -z "${HEADLESS}" ] && [ "${INTERCEPTOR}" != "0" ]; then
+	(
+		sleep 2.5
+		"${SCRIPT_DIR}/tools/cam.sh" rear-right 4 "${INTERCEPTOR_NAME}" >/dev/null 2>&1 || true
+		sleep 2.5
+		"${SCRIPT_DIR}/tools/cam.sh" rear-right 4 "${INTERCEPTOR_NAME}" >/dev/null 2>&1 || true
+	) &
 fi
 
 start_px4() { # instance autostart model_name [px4 options]

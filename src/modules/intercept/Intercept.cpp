@@ -189,9 +189,38 @@ void Intercept::UpdateVisualDetection()
 	}
 }
 
-void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd)
+void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd)
 {
-	// 1. Aim point: 60m behind the target and 20m below the target (NED: +20m is down)
+	const hrt_abstime now = hrt_absolute_time();
+	float dt = 0.02f; // default 50 Hz work item
+	if (_last_approach_time > 0 && now > _last_approach_time) {
+		dt = math::constrain((float)(now - _last_approach_time) * 1e-6f, 0.005f, 0.1f);
+	}
+	_last_approach_time = now;
+
+	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+	const float dist_to_target = (_target_pos - self_pos).norm();
+
+	// 1. Closing rate calculation (Yol B: mesafe kapanma hızı)
+	if (_last_approach_dist < 0.f) {
+		_last_approach_dist = dist_to_target;
+		_filt_closing_speed = 0.f;
+	} else if (dt > 0.005f) {
+		const float raw_closing_speed = (_last_approach_dist - dist_to_target) / dt;
+		_filt_closing_speed = 0.85f * _filt_closing_speed + 0.15f * raw_closing_speed;
+		_last_approach_dist = dist_to_target;
+	}
+
+	// Initialize continuous speed from current forward speed if needed
+	const float psi = _local_pos.heading;
+	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
+	if (!_speed_initialized) {
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 20.0f, 45.0f);
+		_fwd_accel_cmd = 0.0f;
+		_speed_initialized = true;
+	}
+
+	// Target flight direction and speed
 	const float target_speed = _target_vel.norm();
 	matrix::Vector3f target_dir(1.f, 0.f, 0.f);
 
@@ -199,154 +228,271 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		target_dir = _target_vel / target_speed;
 	}
 
-	const float dist_behind = 35.f;
-	const float dist_below = 12.f;
-	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind + matrix::Vector3f(0.f, 0.f, dist_below);
+	const float min_closing = _param_int_min_closing.get(); // default 5.0 m/s
 
-	// 2. Intercept prediction based on high-speed pursuit cruise speed (38 m/s)
-	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
-	const matrix::Vector3f to_aim = aim_point - self_pos;
-	const float dist_to_aim = to_aim.norm();
-
-	const float cruise_speed = 38.f; // m/s (enables strong 74-76 deg tilt and rapid closure)
-	const float time_to_intercept = dist_to_aim / cruise_speed;
-
-	// Predicted position of the aim point at estimated arrival time
-	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_intercept;
-
-	// 3. Direction and velocity command towards intercept point
-	const matrix::Vector3f to_intercept = intercept_point - self_pos;
-	const float dist_to_intercept = to_intercept.norm();
-
-	if (dist_to_intercept > 10.f) {
-		vel_cmd = (to_intercept / dist_to_intercept) * cruise_speed;
+	// 2. Direct acceleration control based on closing distance and closing rate
+	if (dist_to_target > 100.0f) {
+		// Far away (>100m): full throttle pursuit (+5.0 m/s^2 towards 45 m/s top speed)
+		_fwd_accel_cmd = 5.0f;
 	} else {
-		// Maintain a 31 m/s closing speed near the aim point so the drone keeps forward tilt
-		vel_cmd = _target_vel + (to_intercept / math::max(dist_to_intercept, 0.1f)) * 6.0f;
+		// Inside 100m approaching visual range (50m):
+		// Desired closing speed tapers from ~16 m/s at 100m down to min_closing (8 m/s) at 50m
+		const float desired_closing = min_closing + (dist_to_target - 50.0f) * 0.16f;
+		const float closing_err = _filt_closing_speed - desired_closing;
+
+		if (closing_err > 0.0f) {
+			// Closing faster than desired: smooth braking
+			_fwd_accel_cmd = math::constrain(-1.5f - 0.3f * closing_err, -5.0f, -0.8f);
+		} else if (closing_err < -2.0f) {
+			// Closing too slowly: gentle positive acceleration
+			_fwd_accel_cmd = 2.0f;
+		} else {
+			_fwd_accel_cmd = 0.0f;
+		}
 	}
 
-	// 4. Yaw command points camera/nose horizontally towards current target position
+	// Integrate continuous speed from acceleration command
+	_fwd_speed_cmd += _fwd_accel_cmd * dt;
+
+	// Clamp forward speed:
+	// Minimum speed GUARANTEES closing speed never drops below min_closing (default 8 m/s)!
+	const float min_approach_speed = _target_pos_valid ? math::max(target_speed + min_closing, 15.0f) : 15.0f;
+	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 45.0f);
+
+	// 3. Aim point placed 30m directly behind target along its flight line
+	const float dist_behind = 30.f;
+	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
+
+	const matrix::Vector3f to_aim = aim_point - self_pos;
+	const float dist_to_aim = to_aim.norm();
+	const float time_to_aim = dist_to_aim / math::max(_fwd_speed_cmd, 10.0f);
+
+	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim;
+	const matrix::Vector3f to_intercept = intercept_point - self_pos;
+
+	// 4. Horizontal velocity setpoint in inertial NED
+	const matrix::Vector2f to_intercept_xy(to_intercept(0), to_intercept(1));
+	const float dist_xy = to_intercept_xy.norm();
+	float desired_vx{0.f};
+	float desired_vy{0.f};
+
+	if (dist_xy > 0.5f) {
+		const matrix::Vector2f vel_xy = (to_intercept_xy / dist_xy) * _fwd_speed_cmd;
+		desired_vx = vel_xy(0);
+		desired_vy = vel_xy(1);
+	} else {
+		desired_vx = target_dir(0) * _fwd_speed_cmd;
+		desired_vy = target_dir(1) * _fwd_speed_cmd;
+	}
+
+	// Horizontal acceleration slew-rate limit matching MPC_ACC_HOR
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_acc_hor = _param_mpc_acc_hor.get();
+		const float max_dvh = max_acc_hor * dt;
+		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
+		vel_cmd(1) = math::constrain(desired_vy, _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
+	} else {
+		vel_cmd(0) = desired_vx;
+		vel_cmd(1) = desired_vy;
+	}
+
+	// 5. Altitude controller in Approach mode
+	// delta_z in NED: negative means intercept point is higher (climb), positive is lower (descend)
+	const float delta_z = intercept_point(2) - self_pos(2);
+	const float target_vz = _target_vel(2);
+	const float K_z_p = _param_int_kp_z_app.get();
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -3.0f, 2.5f);
+
+	// Slew-rate limit vertical velocity (max 2.0 m/s^2 acceleration) to prevent pitch hunting
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_dvz = 2.0f * dt;
+		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
+	} else {
+		vel_cmd(2) = vz_desired;
+	}
+
+	// 6. Yaw setpoint: point drone nose horizontally towards target position with slew-rate limiting
 	const float dx = _target_pos(0) - _local_pos.x;
 	const float dy = _target_pos(1) - _local_pos.y;
-	yaw_cmd = atan2f(dy, dx);
+	const float desired_yaw = atan2f(dy, dx);
+
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float max_dyaw = max_yaw_rate * dt;
+		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
+		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
+	} else {
+		yaw_cmd = desired_yaw;
+	}
 }
 
-void Intercept::ComputeTerminalVisualGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd)
+void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd)
 {
 	const hrt_abstime now = hrt_absolute_time();
 
 	const float cx = _target_detection.bbox[0]; // [0.0, 1.0], center is 0.50
 	const float cy = _target_detection.bbox[1]; // [0.0, 1.0], center is 0.50
-	const float w  = _target_detection.bbox[2]; // Target bounding box width
-	const float h  = _target_detection.bbox[3]; // Target bounding box height
+	const float w  = _target_detection.bbox[2]; // Target bounding box width fraction
 
-	constexpr float DESIRED_CX = 0.50f;
-	const float desired_w = math::constrain(_param_int_tgt_size.get(), 0.10f, 0.70f);
-	const float desired_ytop = math::constrain(_param_int_tgt_ytop.get(), 0.20f, 0.80f);
+	// Desired visual size setpoint
+	const float desired_w = math::constrain(_param_int_tgt_size.get(), 0.10f, 0.60f);
 
-	// Compute time step for optical rate damping
+	// Compute time step for optical derivative estimation
 	float dt = 0.033f; // default 30 Hz
 	if (_last_visual_time > 0 && now > _last_visual_time) {
-		dt = math::constrain((float)(now - _last_visual_time) * 1e-6f, 0.005f, 0.2f);
+		dt = math::constrain((float)(now - _last_visual_time) * 1e-6f, 0.005f, 0.15f);
 	}
 	_last_visual_time = now;
 
-	// 1. Adaptive Base Speed Estimation (Learns unknown target speed dynamically)
-	const float psi = _local_pos.heading;
-	const float cos_psi = cosf(psi);
-	const float sin_psi = sinf(psi);
-	const float current_fwd_speed = _local_pos.vx * cos_psi + _local_pos.vy * sin_psi;
+	// 1. 3D Line-of-Sight in Inertial NED frame
+	const matrix::Dcmf R_nb(matrix::Quatf(_vehicle_attitude.q));
+	const matrix::Vector3f los_body(_target_detection.los_body);
+	matrix::Vector3f los_ned = R_nb * los_body;
 
-	if (!_speed_initialized || _adaptive_base_speed < 5.0f) {
-		_adaptive_base_speed = math::constrain(current_fwd_speed, 15.0f, 35.0f);
+	if (los_ned.longerThan(FLT_EPSILON)) {
+		los_ned.normalize();
+	} else {
+		los_ned = matrix::Vector3f(1.f, 0.f, 0.f);
+	}
+
+	_last_los_ned = los_ned;
+	_los_ned_valid = true;
+
+	// Current forward ground speed along heading
+	const float psi = _local_pos.heading;
+	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
+
+	// Initialize continuous forward speed if needed
+	if (!_speed_initialized || _fwd_speed_cmd < 5.0f) {
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, 45.0f);
+		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
 	}
 
-	const float err_w = desired_w - w;
-	const float d_w_dt = (w - _last_w) / dt;
-	const float rel_expansion_rate = d_w_dt / math::max(w, 0.01f); // (V_self - V_target) / D (1/s)
+	// 2. Optical Looming Divergence (D = dw/w) Smooth Acceleration Control
+	// Filtered bounding box expansion rate (dw/dt)
+	const float raw_d_w_dt = (w - _last_w) / dt;
+	_filt_d_w_dt = 0.80f * _filt_d_w_dt + 0.20f * raw_d_w_dt;
 
-	// Base speed adapts dynamically using both size error integrator and expansion damping:
-	// If w > desired_w (target too big, drone too close), base speed gradually reduces!
-	// If w < desired_w (target too small, drone too far), base speed gradually increases!
-	constexpr float K_adapt_err = 0.8f;
-	constexpr float K_adapt_exp = 2.0f;
-	_adaptive_base_speed += (K_adapt_err * err_w - K_adapt_exp * rel_expansion_rate) * dt;
-	_adaptive_base_speed = math::constrain(_adaptive_base_speed, 15.0f, 36.0f);
+	const float w_safe = math::max(w, 0.02f);
+	const float divergence = _filt_d_w_dt / w_safe; // (dw/dt)/w = V_rel / Dist (1/s)
 
-	// Standoff closing / braking adjustment
-	constexpr float K_p_w = 12.0f;
-	constexpr float K_d_exp = 3.5f;
-	const float v_standoff_adj = math::constrain(K_p_w * err_w - K_d_exp * rel_expansion_rate, -5.5f, 4.0f);
+	// Bounding box size tolerance corridor (+/- 0.04 around desired_w, e.g. [0.46, 0.54])
+	constexpr float W_TOL = 0.04f;
+	const float w_min = desired_w - W_TOL;
+	const float w_max = desired_w + W_TOL;
 
-	// 2. Horizontal: Seat Drone Strictly on the Tail Centerline (Yaw + Lateral Roll)
-	// cx > 0.50: target is right in FOV -> slide right (+V_lat) & yaw right
-	// cx < 0.50: target is left in FOV -> slide left (-V_lat) & yaw left
-	const float err_x = cx - DESIRED_CX;
-	const float d_x_dt = (cx - _last_cx) / dt;
+	const float kp_opt = _param_int_kp_opt.get();
+	const float kd_opt = _param_int_kd_opt.get();
+	const float max_acc_hor = _param_mpc_acc_hor.get();
 
-	const float k_p_lat = math::constrain(_param_int_kp_lat.get(), 0.5f, 15.0f);
-	constexpr float K_d_lat = 0.4f;
-	const float v_lat = math::constrain(k_p_lat * err_x + K_d_lat * d_x_dt, -3.5f, 3.5f);
+	float accel_cmd = 0.0f;
 
-	// Yaw points camera nose directly at target azimuth
-	const float visual_yaw_err = math::constrain(err_x * 1.20f, -0.40f, 0.40f);
-	yaw_cmd = _local_pos.heading + visual_yaw_err;
+	if (w < w_min) {
+		// Target too far (w < 0.46): accelerate towards tolerance corridor
+		const float norm_err_w = (w_min - w) / desired_w;
+		accel_cmd = kp_opt * norm_err_w - kd_opt * math::max(0.0f, divergence);
 
-	// 3. Vertical: Seat Top Edge of BBox on Horizontal Centerline (y = desired_ytop)
-	// y_top = cy - h/2.
-	// y_top < desired_ytop: target is high up in frame (drone is underneath) -> err_y_top < 0 -> V_z < 0 (CLIMB!)
-	// y_top > desired_ytop: target is low down in frame (drone is above) -> err_y_top > 0 -> V_z > 0 (DESCEND!)
-	const float y_top = cy - (h * 0.5f);
-	const float err_y_top = y_top - desired_ytop;
-	const float d_ytop_dt = (y_top - _last_y_top) / dt;
+	} else if (w > w_max) {
+		// Target too close (w > 0.54): decelerate back into tolerance corridor
+		const float norm_err_w = (w_max - w) / desired_w; // negative
+		accel_cmd = kp_opt * norm_err_w - kd_opt * math::max(0.0f, divergence);
 
-	const float k_p_z = math::constrain(_param_int_kp_z.get(), 0.5f, 15.0f);
-	constexpr float K_d_z = 0.5f;
-	const float v_z = math::constrain(k_p_z * err_y_top + K_d_z * d_ytop_dt, -3.5f, 3.0f);
-
-	// 4. Dynamic Climb Priority (Zero fixed speeds):
-	// If the drone is below the target (err_y_top < 0, target high in frame),
-	// we dynamically reduce forward tilt demand proportionally to vertical error.
-	// This frees motor thrust to climb vertically! As y_top reaches desired_ytop, reduction vanishes.
-	float climb_speed_reduction = 0.0f;
-	if (err_y_top < 0.0f) {
-		const float k_climb = math::constrain(_param_int_k_climb.get(), 0.0f, 30.0f);
-		climb_speed_reduction = math::constrain(-err_y_top * k_climb, 0.0f, 8.0f);
+	} else {
+		// Target inside [0.46, 0.54] tolerance corridor (~3m +/- 24cm):
+		// Hold constant forward speed; only emergency brake if closing dangerously fast
+		if (divergence > 0.15f) {
+			accel_cmd = -kd_opt * divergence;
+		} else {
+			accel_cmd = 0.0f;
+		}
 	}
 
-	const float v_fwd = math::max(_adaptive_base_speed + v_standoff_adj - climb_speed_reduction, 15.0f);
+	// Clamp commanded acceleration to MPC_ACC_HOR
+	_fwd_accel_cmd = math::constrain(accel_cmd, -max_acc_hor, max_acc_hor);
 
-	// 5. Transform Body/Track Velocity Commands to World NED
-	vel_cmd(0) = v_fwd * cos_psi - v_lat * sin_psi;
-	vel_cmd(1) = v_fwd * sin_psi + v_lat * cos_psi;
-	vel_cmd(2) = v_z;
+	// Integrate forward speed command
+	_fwd_speed_cmd += _fwd_accel_cmd * dt;
+	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, 15.0f, 45.0f);
 
-	// 5. Net Deployment Trigger Condition (Automatic Fire Control)
-	const bool locked_x = (fabsf(err_x) < 0.05f); // within 5% of horizontal center
-	const bool locked_y = (fabsf(err_y_top) < 0.05f); // top edge touches center line (+/- 5%)
-	const bool locked_dist = (fabsf(err_w) < 0.04f); // target nicely sized in net window
+	_last_w = w;
 
-	if (locked_x && locked_y && locked_dist) {
-		if (_lock_start_time == 0) {
-			_lock_start_time = now;
-		} else if (!_net_deployed && (hrt_elapsed_time(&_lock_start_time) > 400_ms)) {
-			_net_deployed = true;
-			_target_locked = true;
-			PX4_WARN("=================================================");
-			PX4_WARN(">>> TARGET LOCKED IN NET CONE! NET DEPLOYED! <<<");
-			PX4_WARN("Intercept speed: ~%.1f m/s, cx: %.2f, y_top: %.2f, bbox_w: %.2f",
-				 (double)current_fwd_speed, (double)cx, (double)y_top, (double)w);
-			PX4_WARN("=================================================");
-		}
+	// 3. 3D Velocity Command
+	// Longitudinal velocity along 3D line of sight
+	const matrix::Vector3f vel_los = los_ned * _fwd_speed_cmd;
+
+	// Lateral visual centering: deadband corridor +/- 0.04 around screen center (0.50)
+	const float kp_lat = _param_int_kp_lat.get();
+	float lat_err = 0.0f;
+	if (cx < 0.46f) {
+		lat_err = cx - 0.46f;
+	} else if (cx > 0.54f) {
+		lat_err = cx - 0.54f;
 	} else {
-		_lock_start_time = 0;
-		_target_locked = false;
+		lat_err = 0.0f;
+	}
+	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -3.0f, 3.0f);
+
+	// Unit horizontal vector perpendicular to LOS in XY plane
+	const float los_xy_norm = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
+	float desired_vx = vel_los(0);
+	float desired_vy = vel_los(1);
+
+	if (los_xy_norm > 0.01f) {
+		const float right_x = -los_ned(1) / los_xy_norm;
+		const float right_y =  los_ned(0) / los_xy_norm;
+		desired_vx += right_x * vel_lat_corr;
+		desired_vy += right_y * vel_lat_corr;
+	}
+
+	// Slew-rate limit horizontal acceleration matching MPC_ACC_HOR
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_dvh = max_acc_hor * dt;
+		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
+		vel_cmd(1) = math::constrain(desired_vy, _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
+	} else {
+		vel_cmd(0) = desired_vx;
+		vel_cmd(1) = desired_vy;
+	}
+
+	// Vertical velocity: smooth altitude tracking along LOS with optical elevation P-correction
+	// Elevation deadband corridor +/- 0.04 around screen center (0.50) completely stops pitch hunting!
+	const float kp_z = _param_int_kp_z.get();
+	float vert_err = 0.0f;
+	if (cy < 0.46f) {
+		vert_err = cy - 0.46f;
+	} else if (cy > 0.54f) {
+		vert_err = cy - 0.54f;
+	} else {
+		vert_err = 0.0f;
+	}
+	const float vz_los = los_ned(2) * _fwd_speed_cmd;
+	const float vz_opt = vert_err * kp_z;
+	const float vz_desired = math::constrain(vz_los + vz_opt, -4.0f, 3.0f);
+
+	// Slew-rate limit vertical acceleration (max 1.8 m/s^2) to prevent pitch oscillations
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_dvz = 1.8f * dt;
+		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
+	} else {
+		vel_cmd(2) = vz_desired;
+	}
+
+	// 4. Heading Alignment (Yaw): point nose along flight path (coordinated flight)
+	// Eliminates sideslip and roll-yaw fighting completely
+	const float desired_yaw = atan2f(vel_cmd(1), vel_cmd(0));
+
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float max_dyaw = max_yaw_rate * dt;
+		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
+		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
+	} else {
+		yaw_cmd = desired_yaw;
 	}
 
 	_last_cx = cx;
 	_last_cy = cy;
-	_last_y_top = y_top;
 	_last_w  = w;
 }
 
@@ -406,63 +552,66 @@ void Intercept::Run()
 	// 7. Mode execution
 	if (_is_active) {
 		if (!_was_active) {
-			PX4_INFO("Intercept mode activated: pursuing target for visual acquisition");
+			PX4_INFO("Intercept mode activated: pursuing target");
 			_was_active = true;
 			_hold_valid = false;
-			_guidance_state = GuidanceState::MIDCOURSE_GPS;
+			_guidance_state = GuidanceState::APPROACH;
 			_last_cmd_valid = false;
 			_last_visual_time = 0;
-			_lock_start_time = 0;
-			_target_locked = false;
+			_speed_initialized = false;
+			_los_ned_valid = false;
+			_fwd_speed_cmd = 45.f;
+			_fwd_accel_cmd = 0.f;
+			_speed_initialized = false;
+			_last_approach_dist = -1.f;
+			_filt_closing_speed = 0.f;
+			_last_approach_time = 0;
 		}
 
-		// State transitions: Midcourse GPS <-> Terminal Visual Handover
-		if (_guidance_state == GuidanceState::MIDCOURSE_GPS) {
-			const float dist_to_tgt = (_target_pos_valid) ?
-				matrix::Vector2f(_target_pos(0) - _local_pos.x, _target_pos(1) - _local_pos.y).norm() : 999.f;
-
-			// Hand over ONLY when visual contact is confirmed AND vehicle has entered the 40m approach funnel
-			// (guarantees the drone has descended to the correct rear-lower altitude before visual lock)
-			if (_visual_contact && _target_detection.detected && (dist_to_tgt < 40.0f)) {
-				_guidance_state = GuidanceState::TERMINAL_VISUAL;
-				_terminal_start_time = hrt_absolute_time();
+		// State transitions: APPROACH <-> CLOSE_PURSUIT
+		if (_guidance_state == GuidanceState::APPROACH) {
+			// Transition to CLOSE_PURSUIT as soon as target is acquired visually
+			if (_visual_contact && _target_detection.detected && (_target_detection.bbox[2] > 0.005f)) {
+				_guidance_state = GuidanceState::CLOSE_PURSUIT;
 				_last_visual_time = 0;
-				_lock_start_time = 0;
-				_target_locked = false;
-
-				// Initialize baseline speed from drone's current forward ground speed
-				const float psi = _local_pos.heading;
-				const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
-				_adaptive_base_speed = math::constrain(current_fwd_speed, 15.0f, 35.0f);
-				_speed_initialized = true;
+				_los_ned_valid = false;
+				_filt_d_w_dt = 0.f;
 
 				_last_w = _target_detection.bbox[2];
 				_last_cx = _target_detection.bbox[0];
 				_last_cy = _target_detection.bbox[1];
-				_last_y_top = _target_detection.bbox[1] - (_target_detection.bbox[3] * 0.5f);
 
-				PX4_INFO("Handover: switched to TERMINAL_VISUAL (PURE OPTICAL) guidance (init speed: %.1f m/s, bbox_w: %.3f)",
-					 (double)_adaptive_base_speed, (double)_target_detection.bbox[2]);
+				if (!_last_cmd_valid) {
+					_last_yaw_cmd = _local_pos.heading;
+					_last_vel_cmd(0) = _local_pos.vx;
+					_last_vel_cmd(1) = _local_pos.vy;
+					_last_vel_cmd(2) = _local_pos.vz;
+					_last_cmd_valid = true;
+				}
+
+				PX4_INFO("Visual contact acquired! Handover to CLOSE_PURSUIT (IBVS), speed=%.1f m/s, bbox_w=%.3f",
+					 (double)_fwd_speed_cmd, (double)_last_w);
 			}
 
-		} else if (_guidance_state == GuidanceState::TERMINAL_VISUAL) {
+		} else if (_guidance_state == GuidanceState::CLOSE_PURSUIT) {
 			if (!_visual_contact) {
-				_guidance_state = GuidanceState::MIDCOURSE_GPS;
+				_guidance_state = GuidanceState::APPROACH;
 				_last_cmd_valid = false;
 				_last_visual_time = 0;
-				_lock_start_time = 0;
-				_target_locked = false;
 				_speed_initialized = false;
-				PX4_WARN("Visual contact lost (>1.5s), reverting to MIDCOURSE_GPS");
+				_los_ned_valid = false;
+				_last_approach_dist = -1.f;
+				_last_approach_time = 0;
+				PX4_WARN("Visual contact lost (>1.5s), reverting to APPROACH");
 			}
 		}
 
-		if (_guidance_state == GuidanceState::TERMINAL_VISUAL) {
+		if (_guidance_state == GuidanceState::CLOSE_PURSUIT) {
 			matrix::Vector3f vel_cmd;
 			float yaw_cmd{_local_pos.heading};
 
 			if (_target_detection.detected && (_target_detection.bbox[2] > 0.005f)) {
-				ComputeTerminalVisualGuidance(vel_cmd, yaw_cmd);
+				ComputeClosePursuitGuidance(vel_cmd, yaw_cmd);
 				_last_vel_cmd = vel_cmd;
 				_last_yaw_cmd = yaw_cmd;
 				_last_cmd_valid = true;
@@ -489,10 +638,13 @@ void Intercept::Run()
 			_trajectory_setpoint_pub.publish(sp);
 
 		} else if (_target_pos_valid) {
-			// Midcourse guidance: fly towards rear-lower intercept point and point nose at target
+			// Approach guidance: fly towards aim point behind target
 			matrix::Vector3f vel_cmd;
 			float yaw_cmd{_local_pos.heading};
-			ComputeMidcourseGuidance(vel_cmd, yaw_cmd);
+			ComputeApproachGuidance(vel_cmd, yaw_cmd);
+			_last_vel_cmd = vel_cmd;
+			_last_yaw_cmd = yaw_cmd;
+			_last_cmd_valid = true;
 
 			trajectory_setpoint_s sp{};
 			sp.timestamp = hrt_absolute_time();
@@ -542,12 +694,16 @@ void Intercept::Run()
 			PX4_INFO("Intercept mode deactivated");
 			_was_active = false;
 			_hold_valid = false;
-			_guidance_state = GuidanceState::MIDCOURSE_GPS;
+			_guidance_state = GuidanceState::APPROACH;
 			_last_cmd_valid = false;
 			_last_visual_time = 0;
-			_lock_start_time = 0;
-			_target_locked = false;
 			_speed_initialized = false;
+			_los_ned_valid = false;
+			_fwd_speed_cmd = 45.f;
+			_fwd_accel_cmd = 0.f;
+			_last_approach_dist = -1.f;
+			_filt_closing_speed = 0.f;
+			_last_approach_time = 0;
 		}
 	}
 }
@@ -580,13 +736,16 @@ int Intercept::print_status()
 		PX4_INFO("Target GPS: no valid fix");
 	}
 
-	PX4_INFO("Guidance state: %s", (_guidance_state == GuidanceState::TERMINAL_VISUAL) ? "TERMINAL_VISUAL (PURE OPTICAL)" : "MIDCOURSE_GPS");
+	PX4_INFO("Guidance state: %s", (_guidance_state == GuidanceState::CLOSE_PURSUIT) ? "CLOSE_PURSUIT (IBVS Visual Servoing)" : "APPROACH (Midcourse GPS)");
+	PX4_INFO("Speed setpoint: %.1f m/s, accel_cmd: %.2f m/s^2, closing rate: %.1f m/s",
+		 (double)_fwd_speed_cmd, (double)_fwd_accel_cmd, (double)_filt_closing_speed);
 
 	if (_visual_contact) {
 		PX4_INFO("Visual contact: YES (range: %.1f m, bbox: [%.2f, %.2f, %.2f, %.2f])",
 			 (double)_visual_range, (double)_target_detection.bbox[0], (double)_target_detection.bbox[1],
 			 (double)_target_detection.bbox[2], (double)_target_detection.bbox[3]);
-		PX4_INFO("Fire Control: Locked=%s, Net Deployed=%s", _target_locked ? "YES" : "NO", _net_deployed ? "YES" : "NO");
+		PX4_INFO("Forward speed command: %.1f m/s, LOS NED: [%.2f, %.2f, %.2f]",
+			 (double)_fwd_speed_cmd, (double)_last_los_ned(0), (double)_last_los_ned(1), (double)_last_los_ned(2));
 	} else {
 		PX4_INFO("Visual contact: NO");
 	}
@@ -633,8 +792,11 @@ int Intercept::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-Target intercept flight mode for autonomous drone interception.
-Registers an external flight mode 'Intercept' with Commander.
+Autonomous target intercept and close pursuit flight mode.
+Two-stage guidance:
+  1. APPROACH: Midcourse lead-pursuit towards target GPS position.
+  2. CLOSE_PURSUIT: Pure IBVS visual servoing & 3D LOS station-keeping.
+Registers external flight mode 'Intercept' with Commander.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("intercept", "mode");

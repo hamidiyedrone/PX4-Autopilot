@@ -97,9 +97,17 @@ def main():
 	]
 
 	# ---- CG along the fuselage axis (measured from the tail end z=0)
-	# Fixed parts: shell + internal components + tail fins
+	# Fixed parts: shell + internal components + tail fins + gimbal
 	z_fin_center = fins["z_from_tail"] + fins["chord"] / 2
+	gimbal = c.get("gimbal", {})
+	gimbal_enabled = gimbal.get("enabled", False)
+	m_gimbal = gimbal.get("mass", 0.120) if gimbal_enabled else 0.0
+	z_gimbal = L - 0.015
+
 	fixed = [(fus["mass"], L / 2)] + [(p["mass"], p["z"]) for p in c["components"].values()] + [(fins["mass"], z_fin_center)]
+	if m_gimbal > 0:
+		fixed.append((m_gimbal, z_gimbal))
+
 	m_fixed = sum(m for m, _ in fixed)
 	m_mot = n_mot * mot["mass"]
 	m_arms = mot["arm_mass"]  # 4 wings + nacelles + landing legs
@@ -117,6 +125,9 @@ def main():
 	# Internal components
 	for p in c["components"].values():
 		I += parallel_axis(box_inertia(p["mass"], *p["size"]), p["mass"], [0, 0, p["z"] - cg])
+
+	if m_gimbal > 0:
+		I += parallel_axis(np.diag([1e-5, 1e-5, 1e-5]), m_gimbal, [0, 0, z_gimbal - cg])
 
 	# 4 Tail fins
 	m_single_fin = fins["mass"] / 4
@@ -207,7 +218,8 @@ def main():
 		   prop_scale=prop_scale, c_side=c_side, c_axial=c_axial_total,
 		   wing_area_total=wing_area_total, wing_pair_area=wing_pair_area,
 		   wing_cla=wing_cla, arm_len=arm_len, r_arm_mid=r_arm_mid,
-		   z_ground_rel_cg=z_ground_rel_cg, spawn_z=spawn_z)
+		   z_ground_rel_cg=z_ground_rel_cg, spawn_z=spawn_z,
+		   gimbal=gimbal, m_gimbal=m_gimbal)
 
 	with open(os.path.join(model_dir, "model.sdf"), "w") as f:
 		f.write(sdf(geo))
@@ -283,7 +295,11 @@ def sdf(g):
 
 	# Optical seeker turret on nose tip
 	cam_lens_z = fus["length"] - cg
-	vis += f"""
+	gimbal = g.get("gimbal", {})
+	gimbal_enabled = gimbal.get("enabled", False)
+
+	if not gimbal_enabled:
+		vis += f"""
       <visual name="seeker_turret_visual">
         <pose>0 0 {cam_lens_z - 0.015:.4f} 0 0 0</pose>
         <geometry><cylinder><radius>0.022</radius><length>0.035</length></cylinder></geometry>
@@ -293,6 +309,13 @@ def sdf(g):
         <pose>0 0 {cam_lens_z:.4f} 0 0 0</pose>
         <geometry><sphere><radius>0.014</radius></sphere></geometry>
         <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
+      </visual>"""
+	else:
+		vis += f"""
+      <visual name="gimbal_base_collar_visual">
+        <pose>0 0 {cam_lens_z - 0.020:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>0.024</radius><length>0.015</length></cylinder></geometry>
+        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
       </visual>"""
 
 	# 4 Tail fins at the rear
@@ -396,9 +419,10 @@ def sdf(g):
 	camera = ""
 	if c.get("camera", {}).get("enabled"):
 		cam = c["camera"]
+		cam_pose = "0 0 0 0 -1.5708 0" if gimbal_enabled else f"0 0 {fus['length'] - cg:.4f} 0 -1.5708 0"
 		camera = f"""
       <sensor name="nose_camera" type="camera">
-        <pose>0 0 {fus["length"] - cg:.4f} 0 -1.5708 0</pose>
+        <pose>{cam_pose}</pose>
         <always_on>1</always_on>
         <update_rate>{cam["rate"]}</update_rate>
         <camera>
@@ -462,12 +486,122 @@ def sdf(g):
 	acc = "".join(f"<{a}>{noise(0.004, 0.006, 300)}</{a}>" for a in "xyz")
 
 	# Aerodynamic LiftDrag for the X-wing arms:
-	# Diagonal Pair A: wings at +45 deg and -135 deg (motors 2 and 1)
-	# Upward normal: [-1/sqrt(2), 1/sqrt(2), 0]
-	# Diagonal Pair B: wings at -45 deg and +135 deg (motors 0 and 3)
-	# Upward normal: [-1/sqrt(2), -1/sqrt(2), 0]
-	# Combined: pure upward lift in -x (world up when tilted forward), lateral forces cancel out!
 	inv_sqrt2 = 1.0 / math.sqrt(2)
+
+	gimbal_sdf = ""
+	gimbal_plugins = ""
+	if gimbal_enabled:
+		m_g = g.get("m_gimbal", 0.12) / 2
+		yaw_lim = math.radians(gimbal.get("yaw_limit_deg", 45))
+		pitch_lim = math.radians(gimbal.get("pitch_limit_deg", 45))
+		p_gain = gimbal.get("p_gain", 5.0)
+		i_gain = gimbal.get("i_gain", 0.1)
+		d_gain = gimbal.get("d_gain", 0.05)
+
+		gimbal_sdf = f"""
+    <!-- 2-Axis Gimbal: Yaw Joint & Link (+/- {gimbal.get("yaw_limit_deg", 45)} deg around fuselage z) -->
+    <link name="gimbal_yaw_link">
+      <pose>0 0 {cam_lens_z - 0.010:.4f} 0 0 0</pose>
+      <inertial>
+        <mass>{m_g:.4f}</mass>
+        <inertia>
+          <ixx>0.0005</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0005</iyy><iyz>0</iyz><izz>0.0005</izz>
+        </inertia>
+      </inertial>
+      <visual name="gimbal_yaw_yoke_visual">
+        <pose>0 0 0 0 0 0</pose>
+        <geometry><cylinder><radius>0.022</radius><length>0.016</length></cylinder></geometry>
+        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
+      </visual>
+    </link>
+
+    <joint name="gimbal_yaw_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>gimbal_yaw_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>{-yaw_lim:.4f}</lower>
+          <upper>{yaw_lim:.4f}</upper>
+          <effort>5</effort>
+          <velocity>10</velocity>
+        </limit>
+        <dynamics><damping>0.03</damping><friction>0.005</friction></dynamics>
+      </axis>
+      <physics>
+        <ode>
+          <implicit_spring_damper>1</implicit_spring_damper>
+        </ode>
+      </physics>
+    </joint>
+
+    <!-- 2-Axis Gimbal: Pitch Joint & Link (+/- {gimbal.get("pitch_limit_deg", 45)} deg around cross y) with Camera -->
+    <link name="gimbal_pitch_link">
+      <pose>0 0 {cam_lens_z:.4f} 0 0 0</pose>
+      <inertial>
+        <mass>{m_g:.4f}</mass>
+        <inertia>
+          <ixx>0.0005</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0005</iyy><iyz>0</iyz><izz>0.0005</izz>
+        </inertia>
+      </inertial>
+      <visual name="seeker_turret_visual">
+        <pose>0 0 -0.010 0 0 0</pose>
+        <geometry><sphere><radius>0.020</radius></sphere></geometry>
+        <material><ambient>{accent_dark}</ambient><diffuse>{accent_dark}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+      </visual>
+      <visual name="camera_lens_visual">
+        <pose>0 0 0.005 0 0 0</pose>
+        <geometry><cylinder><radius>0.012</radius><length>0.010</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
+      </visual>{camera}
+    </link>
+
+    <joint name="gimbal_pitch_joint" type="revolute">
+      <parent>gimbal_yaw_link</parent>
+      <child>gimbal_pitch_link</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>{-pitch_lim:.4f}</lower>
+          <upper>{pitch_lim:.4f}</upper>
+          <effort>5</effort>
+          <velocity>10</velocity>
+        </limit>
+        <dynamics><damping>0.03</damping><friction>0.005</friction></dynamics>
+      </axis>
+      <physics>
+        <ode>
+          <implicit_spring_damper>1</implicit_spring_damper>
+        </ode>
+      </physics>
+    </joint>"""
+
+		gimbal_plugins = f"""
+    <!-- 2-Axis Gimbal Joint Position Controllers -->
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_yaw_joint</joint_name>
+      <sub_topic>command/seeker_yaw</sub_topic>
+      <p_gain>{p_gain}</p_gain>
+      <i_gain>{i_gain}</i_gain>
+      <d_gain>{d_gain}</d_gain>
+      <i_max>1.0</i_max>
+      <i_min>-1.0</i_min>
+      <cmd_max>2.0</cmd_max>
+      <cmd_min>-2.0</cmd_min>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_pitch_joint</joint_name>
+      <sub_topic>command/seeker_pitch</sub_topic>
+      <p_gain>{p_gain}</p_gain>
+      <i_gain>{i_gain}</i_gain>
+      <d_gain>{d_gain}</d_gain>
+      <i_max>1.0</i_max>
+      <i_min>-1.0</i_min>
+      <cmd_max>2.0</cmd_max>
+      <cmd_min>-2.0</cmd_min>
+    </plugin>"""
 
 	return f"""<?xml version="1.0"?>
 <!-- Generated by Tools/simulation/interceptor_sim/tools/build_interceptor.py from interceptor.yaml, do not edit by hand -->
@@ -508,10 +642,12 @@ def sdf(g):
         <gz_frame_id>base_link</gz_frame_id>
         <always_on>1</always_on>
         <update_rate>30</update_rate>
-      </sensor>{camera}
+      </sensor>{"" if gimbal_enabled else camera}
     </link>
 {rotors}
+{gimbal_sdf}
 {plugins}
+{gimbal_plugins}
 
     <!-- Wing arms LiftDrag Pair A (45 deg / -135 deg diagonal) -->
     <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
@@ -610,6 +746,15 @@ def airframe(g, thr_hover, w_min):
 	if c.get("camera", {}).get("enabled"):
 		cam = "\n# nose camera on the thrust axis\nparam set-default TGV_MNT_PITCH 90\n"
 
+	gimbal = c.get("gimbal", {})
+	if gimbal.get("enabled", False):
+		cam += f"""
+# 2-axis nose seeker gimbal (+/- {gimbal.get("yaw_limit_deg", 45)} deg, autonomous seeker control)
+param set-default MNT_MODE_OUT 0
+param set-default MNT_RANGE_YAW {gimbal.get("yaw_limit_deg", 45):.1f}
+param set-default MNT_RANGE_PITCH {gimbal.get("pitch_limit_deg", 45):.1f}
+"""
+
 	body = "\n".join(lines)
 	return f"""#!/bin/sh
 #
@@ -640,8 +785,8 @@ param set-default MPC_THR_HOVER {thr_hover:.2f}
 param set-default MPC_TILTMAX_AIR 78
 param set-default MPC_XY_VEL_MAX 45
 param set-default MPC_XY_CRUISE 38
-param set-default MPC_ACC_HOR_MAX 15
-param set-default MPC_ACC_HOR 12
+param set-default MPC_ACC_HOR_MAX 5.5
+param set-default MPC_ACC_HOR 3.5
 param set-default MPC_Z_VEL_MAX_UP 12
 param set-default MPC_Z_VEL_MAX_DN 4.0
 
