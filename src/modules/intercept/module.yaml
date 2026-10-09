@@ -32,23 +32,23 @@ parameters:
 
         INT_KP_OPT:
             description:
-                short: Optical size error drive gain
-                long: Proportional acceleration gain on normalized size error commanding forward pursuit.
+                short: Optical size error velocity gain
+                long: Proportional speed gain (m/s per normalized size error) commanding forward pursuit speed offset.
             type: float
-            default: 1.2
+            default: 5.0
             min: 0.5
             max: 15.0
             decimal: 1
 
         INT_KD_OPT:
             description:
-                short: Optical expansion braking damper gain
-                long: Derivative braking damper gain on optical divergence (dw/w) preventing collision.
+                short: Optical relative velocity damping gain
+                long: Derivative damping gain on optical relative closing speed (m/s) matching target velocity.
             type: float
-            default: 8.0
-            min: 2.0
-            max: 80.0
-            decimal: 1
+            default: 1.2
+            min: 0.1
+            max: 10.0
+            decimal: 2
 
 
         INT_KP_LAT:
@@ -63,12 +63,12 @@ parameters:
 
         INT_KP_Z:
             description:
-                short: Proportional gain for vertical visual tracking
-                long: Proportional gain (m/s per unit screen error cy - 0.5) for centering target vertically.
+                short: Altitude tracking proportional gain
+                long: Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking.
             type: float
-            default: 2.2
-            min: 0.5
-            max: 15.0
+            default: 1.2
+            min: 0.2
+            max: 5.0
             decimal: 2
 
         INT_KP_Z_APP:

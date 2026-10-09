@@ -369,15 +369,19 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		_speed_initialized = true;
 	}
 
-	// 2. Optical Looming Divergence (D = dw/w) Smooth Acceleration Control
-	// Filtered bounding box expansion rate (dw/dt)
+	// 2. Optical Looming Divergence & Self-Speed Referenced Standoff Velocity Control
+	// Estimate bounding box expansion rate (dw/dt)
 	const float raw_d_w_dt = (w - _last_w) / dt;
 	_filt_d_w_dt = 0.80f * _filt_d_w_dt + 0.20f * raw_d_w_dt;
 
 	const float w_safe = math::max(w, 0.02f);
 	const float divergence = _filt_d_w_dt / w_safe; // (dw/dt)/w = V_rel / Dist (1/s)
 
-	// Bounding box size tolerance corridor (+/- 0.04 around desired_w, e.g. [0.46, 0.54])
+	// Optically estimated relative closing velocity: V_rel = Dist * divergence ~ (1.5 / w) * divergence (m/s)
+	// (Positive = closing in, Negative = target pulling away)
+	const float v_rel = math::constrain((1.5f / w_safe) * divergence, -10.0f, 10.0f);
+
+	// Bounding box size tolerance corridor (+/- 0.04 around desired_w, e.g. [0.46, 0.54] for desired_w = 0.50)
 	constexpr float W_TOL = 0.04f;
 	const float w_min = desired_w - W_TOL;
 	const float w_max = desired_w + W_TOL;
@@ -386,40 +390,54 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float kd_opt = _param_int_kd_opt.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 
-	float accel_cmd = 0.0f;
+	float delta_v = 0.0f;
 
 	if (w < w_min) {
-		// Target too far (w < 0.46): accelerate towards tolerance corridor
+		// Target too far (w < 0.46): drive towards corridor with PD damping
 		const float norm_err_w = (w_min - w) / desired_w;
-		accel_cmd = kp_opt * norm_err_w - kd_opt * math::max(0.0f, divergence);
+		delta_v = kp_opt * norm_err_w - kd_opt * v_rel;
 
 	} else if (w > w_max) {
 		// Target too close (w > 0.54): decelerate back into tolerance corridor
 		const float norm_err_w = (w_max - w) / desired_w; // negative
-		accel_cmd = kp_opt * norm_err_w - kd_opt * math::max(0.0f, divergence);
+		delta_v = kp_opt * norm_err_w - kd_opt * v_rel;
 
 	} else {
 		// Target inside [0.46, 0.54] tolerance corridor (~3m +/- 24cm):
-		// Hold constant forward speed; only emergency brake if closing dangerously fast
-		if (divergence > 0.15f) {
-			accel_cmd = -kd_opt * divergence;
+		// Standoff distance is satisfied. Damp residual relative velocity to lock onto target speed!
+		if (fabsf(v_rel) > 0.15f) {
+			delta_v = -kd_opt * v_rel;
 		} else {
-			accel_cmd = 0.0f;
+			delta_v = 0.0f;
 		}
 	}
 
-	// Clamp commanded acceleration to MPC_ACC_HOR
-	_fwd_accel_cmd = math::constrain(accel_cmd, -max_acc_hor, max_acc_hor);
+	// Clamp commanded velocity delta to prevent abrupt pitch swings
+	delta_v = math::constrain(delta_v, -4.0f, 5.0f);
 
-	// Integrate forward speed command
-	_fwd_speed_cmd += _fwd_accel_cmd * dt;
-	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, 15.0f, 45.0f);
+	// Desired forward speed is referenced to vehicle's OWN actual ground speed
+	// Eliminates the double-integrator limit cycle without assuming target speed is known or constant!
+	const float desired_fwd_speed = math::constrain(current_fwd_speed + delta_v, 15.0f, 45.0f);
+
+	// Slew-rate limit forward speed command matching MPC_ACC_HOR for smooth aerodynamic pitch transitions
+	const float prev_speed_cmd = _fwd_speed_cmd;
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_dv = max_acc_hor * dt;
+		_fwd_speed_cmd = math::constrain(desired_fwd_speed, _fwd_speed_cmd - max_dv, _fwd_speed_cmd + max_dv);
+		_fwd_accel_cmd = (_fwd_speed_cmd - prev_speed_cmd) / dt;
+	} else {
+		_fwd_speed_cmd = desired_fwd_speed;
+		_fwd_accel_cmd = 0.0f;
+	}
 
 	_last_w = w;
 
 	// 3. 3D Velocity Command
-	// Longitudinal velocity along 3D line of sight
-	const matrix::Vector3f vel_los = los_ned * _fwd_speed_cmd;
+	// Longitudinal horizontal velocity along line of sight in XY plane
+	const float los_xy_norm = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
+	const float inv_los_xy = (los_xy_norm > 0.01f) ? (1.0f / los_xy_norm) : 1.0f;
+	const float los_x_norm = los_ned(0) * inv_los_xy;
+	const float los_y_norm = los_ned(1) * inv_los_xy;
 
 	// Lateral visual centering: deadband corridor +/- 0.04 around screen center (0.50)
 	const float kp_lat = _param_int_kp_lat.get();
@@ -433,17 +451,12 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -3.0f, 3.0f);
 
-	// Unit horizontal vector perpendicular to LOS in XY plane
-	const float los_xy_norm = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
-	float desired_vx = vel_los(0);
-	float desired_vy = vel_los(1);
+	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
+	const float right_x = -los_y_norm;
+	const float right_y =  los_x_norm;
 
-	if (los_xy_norm > 0.01f) {
-		const float right_x = -los_ned(1) / los_xy_norm;
-		const float right_y =  los_ned(0) / los_xy_norm;
-		desired_vx += right_x * vel_lat_corr;
-		desired_vy += right_y * vel_lat_corr;
-	}
+	float desired_vx = los_x_norm * _fwd_speed_cmd + right_x * vel_lat_corr;
+	float desired_vy = los_y_norm * _fwd_speed_cmd + right_y * vel_lat_corr;
 
 	// Slew-rate limit horizontal acceleration matching MPC_ACC_HOR
 	if (_last_cmd_valid && dt > 0.005f) {
@@ -455,32 +468,39 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		vel_cmd(1) = desired_vy;
 	}
 
-	// Vertical velocity: smooth altitude tracking along LOS with optical elevation P-correction
-	// Elevation deadband corridor +/- 0.04 around screen center (0.50) completely stops pitch hunting!
-	const float kp_z = _param_int_kp_z.get();
-	float vert_err = 0.0f;
-	if (cy < 0.46f) {
-		vert_err = cy - 0.46f;
-	} else if (cy > 0.54f) {
-		vert_err = cy - 0.54f;
-	} else {
-		vert_err = 0.0f;
-	}
-	const float vz_los = los_ned(2) * _fwd_speed_cmd;
-	const float vz_opt = vert_err * kp_z;
-	const float vz_desired = math::constrain(vz_los + vz_opt, -4.0f, 3.0f);
+	// Vertical altitude tracking with deadband corridor (+/- 0.15m)
+	// Pure optical visual guidance: does NOT assume or require target GPS, barometer, or telemetry!
+	// Computes physical altitude difference directly from optical line-of-sight elevation and estimated distance:
+	const float est_dist = math::constrain(1.5f / w_safe, 1.0f, 50.0f);
+	const float delta_z = est_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
-	// Slew-rate limit vertical acceleration (max 1.8 m/s^2) to prevent pitch oscillations
+	constexpr float Z_TOL = 0.15f; // +/- 15 cm deadband corridor
+	float delta_z_corr = 0.0f;
+	if (delta_z < -Z_TOL) {
+		delta_z_corr = delta_z + Z_TOL; // target higher (NED negative) -> climb
+	} else if (delta_z > Z_TOL) {
+		delta_z_corr = delta_z - Z_TOL; // target lower (NED positive) -> descend
+	} else {
+		delta_z_corr = 0.0f; // within +/- 15cm corridor -> hold level flight!
+	}
+
+	const float kp_z = _param_int_kp_z.get();
+	const float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
+
+	// Slew-rate limit vertical acceleration (max 1.5 m/s^2) to prevent pitch oscillations
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dvz = 1.8f * dt;
+		const float max_dvz = 1.5f * dt;
 		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
 	} else {
 		vel_cmd(2) = vz_desired;
 	}
 
-	// 4. Heading Alignment (Yaw): point nose along flight path (coordinated flight)
-	// Eliminates sideslip and roll-yaw fighting completely
-	const float desired_yaw = atan2f(vel_cmd(1), vel_cmd(0));
+	// 4. Active Seeker Yaw: point nose directly at target azimuth in world NED frame
+	// Keeps target optical axis locked in the center of the camera horizontal FOV (+/- 30 deg)
+	float desired_yaw = _last_cmd_valid ? _last_yaw_cmd : _local_pos.heading;
+	if (los_xy_norm > 0.05f) {
+		desired_yaw = atan2f(los_ned(1), los_ned(0));
+	}
 
 	if (_last_cmd_valid && dt > 0.005f) {
 		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
