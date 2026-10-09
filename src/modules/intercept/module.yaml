@@ -100,3 +100,13 @@ parameters:
             min: 0.0
             max: 30.0
             decimal: 1
+
+        INT_LOST_TIMEOUT:
+            description:
+                short: Visual contact loss timeout
+                long: Time in seconds to steer towards target position and re-acquire visual before reverting to approach.
+            type: float
+            default: 2.0
+            min: 0.5
+            max: 10.0
+            decimal: 1

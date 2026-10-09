@@ -219,7 +219,7 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 
 	if [ "${DETECTOR:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
 		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/sim_detector.py" --world "${WORLD}" \
-			--interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" \
+			--interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" ${DETECTOR_ARGS:-} \
 			> "${SCRIPT_DIR}/build/sim_detector.log" 2>&1 &
 		echo "Detector: tools/sim_detector.py, ground-truth vision → udp 15600, log: ${SCRIPT_DIR}/build/sim_detector.log"
 	fi

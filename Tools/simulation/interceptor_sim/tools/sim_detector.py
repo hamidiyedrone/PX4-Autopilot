@@ -152,7 +152,7 @@ def main():
                     help="UDP port of the target_vision driver")
     ap.add_argument("--rate", type=float, default=30.0,
                     help="detection rate [Hz]")
-    ap.add_argument("--max-range", type=float, default=50.0,
+    ap.add_argument("--max-range", type=float, default=75.0,
                     help="max detection range [m]")
     ap.add_argument("--hfov", type=float, default=None,
                     help="camera HFOV [deg], default: from interceptor.yaml")
