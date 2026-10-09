@@ -9,3 +9,6 @@ intercept start
 
 # HUD link of tools/view_hud.py (the camera window), next to QGroundControl's 14550
 mavlink start -u $((18590+px4_instance)) -o $((14551+px4_instance)) -r 400000 -m custom
+
+# Web GCS telemetry link (dedicated onboard stream)
+mavlink start -u $((18585+px4_instance)) -o $((14545+px4_instance)) -r 400000 -m onboard

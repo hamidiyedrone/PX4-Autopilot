@@ -53,7 +53,7 @@ Intercept::~Intercept()
 
 bool Intercept::init()
 {
-	ScheduleOnInterval(20_ms); // 50 Hz
+	ScheduleOnInterval(10_ms); // 100 Hz guidance loop
 	return true;
 }
 
@@ -168,6 +168,8 @@ void Intercept::UpdateVisualDetection()
 {
 	target_detection_s td;
 
+	_has_fresh_visual = false;
+
 	if (_target_detection_sub.update(&td)) {
 		if (td.detected) {
 			if (!_visual_contact) {
@@ -180,6 +182,7 @@ void Intercept::UpdateVisualDetection()
 			_visual_range = td.range_m;
 			_target_detection = td;
 			_last_visual_contact = hrt_absolute_time();
+			_has_fresh_visual = true;
 		}
 	}
 
@@ -461,16 +464,43 @@ void Intercept::Run()
 			matrix::Vector3f vel_cmd;
 			float yaw_cmd{_local_pos.heading};
 
-			if (_target_detection.detected && (_target_detection.bbox[2] > 0.005f)) {
+			if (_has_fresh_visual && _target_detection.detected && (_target_detection.bbox[2] > 0.005f)) {
+				matrix::Vector3f prev_vel = _last_vel_cmd;
+				float prev_yaw = _last_yaw_cmd;
+				hrt_abstime now = hrt_absolute_time();
+
 				ComputeTerminalVisualGuidance(vel_cmd, yaw_cmd);
+
+				// Compute command derivatives for intermediate 100 Hz predictive extrapolation
+				if (_last_cmd_valid && _last_fresh_visual_time > 0) {
+					float dt_frame = math::constrain((float)(now - _last_fresh_visual_time) * 1e-6f, 0.005f, 0.1f);
+					_vel_cmd_dot = (vel_cmd - prev_vel) / dt_frame;
+					_yaw_cmd_dot = matrix::wrap_pi(yaw_cmd - prev_yaw) / dt_frame;
+
+					// Clamp derivative limits for safety (max 20 m/s^2 accel, max 3.0 rad/s yaw rate)
+					for (int i = 0; i < 3; i++) {
+						_vel_cmd_dot(i) = math::constrain(_vel_cmd_dot(i), -20.f, 20.f);
+					}
+					_yaw_cmd_dot = math::constrain(_yaw_cmd_dot, -3.0f, 3.0f);
+				} else {
+					_vel_cmd_dot.zero();
+					_yaw_cmd_dot = 0.f;
+				}
+
 				_last_vel_cmd = vel_cmd;
 				_last_yaw_cmd = yaw_cmd;
+				_last_fresh_visual_time = now;
 				_last_cmd_valid = true;
 
 			} else if (_last_cmd_valid) {
-				// Coast on last known command during single-frame dropouts
-				vel_cmd = _last_vel_cmd;
-				yaw_cmd = _last_yaw_cmd;
+				// Intermediate 100 Hz cycle (between camera frames):
+				// Damped first-order predictive extrapolation based on command trend
+				hrt_abstime now = hrt_absolute_time();
+				float tau = (float)(now - _last_fresh_visual_time) * 1e-6f;
+				float damping = expf(-tau / 0.040f); // 40ms decay constant
+
+				vel_cmd = _last_vel_cmd + (_vel_cmd_dot * tau) * damping;
+				yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + (_yaw_cmd_dot * tau) * damping);
 			}
 
 			trajectory_setpoint_s sp{};

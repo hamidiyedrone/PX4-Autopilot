@@ -145,6 +145,12 @@ private:
 	float _last_yaw_cmd{0.f};
 	bool _last_cmd_valid{false};
 
+	// Predictive intermediate extrapolation (100 Hz guidance with 50/80 FPS camera)
+	matrix::Vector3f _vel_cmd_dot{};
+	float _yaw_cmd_dot{0.f};
+	hrt_abstime _last_fresh_visual_time{0};
+	bool _has_fresh_visual{false};
+
 	// Pure visual servoing states and optical derivative damping
 	float _last_cx{0.5f};
 	float _last_cy{0.5f};

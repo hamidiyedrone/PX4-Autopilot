@@ -25,6 +25,7 @@ Mirrored wire format: src/drivers/target_vision/target_vision_protocol.h
 import argparse
 import math
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import re
 import socket
 import struct
@@ -236,12 +237,16 @@ def main():
     print("Both models found, starting detection loop", flush=True)
 
     frame_id = 0
-    dt = 1.0 / a.rate
+    rate_far = 50.0   # > 20m: 1920x1200 @ 50 FPS
+    rate_near = 80.0  # <= 20m: 960x600 @ 80 FPS
+    current_rate = rate_far
+    current_mode_near = False
+    dt = 1.0 / current_rate
     last_send = 0.0
     last_print = 0.0
 
     while True:
-        time.sleep(0.002)
+        time.sleep(0.001)
         t_sim = state["t"]
 
         if t_sim - last_send < dt:
@@ -278,6 +283,20 @@ def main():
         d_opt = GZ_TO_OPT @ d_cam_gz  # [x_right, y_down, z_forward]
 
         range_m = float(np.linalg.norm(d_opt))
+
+        # Adaptive Camera FPS based on distance:
+        # Distance > 20m: 50 FPS (1920x1200 mode)
+        # Distance <= 20m: 80 FPS (960x600 mode)
+        if range_m <= 20.0 and not current_mode_near:
+            current_mode_near = True
+            current_rate = rate_near
+            dt = 1.0 / current_rate
+            print(f"[sim_detector] Range {range_m:.1f} m <= 20m -> Switched to 960x600 @ 80 FPS (terminal high-speed mode)", flush=True)
+        elif range_m > 22.0 and current_mode_near:
+            current_mode_near = False
+            current_rate = rate_far
+            dt = 1.0 / current_rate
+            print(f"[sim_detector] Range {range_m:.1f} m > 20m -> Switched to 1920x1200 @ 50 FPS (far acquisition mode)", flush=True)
 
         # check: target must be in front of the camera and within range
         if d_opt[2] <= 0 or range_m > a.max_range or range_m < 0.1:

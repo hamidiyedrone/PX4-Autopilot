@@ -37,6 +37,8 @@
 
 set -e
 
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PX4_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 BUILD_DIR="${PX4_DIR}/build/px4_sitl_default"

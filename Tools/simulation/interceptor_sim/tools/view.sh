@@ -6,7 +6,14 @@
 #   tools/view.sh [port]
 
 PORT="${1:-5600}"
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Prevent duplicate HUD windows
+if pgrep -f "view_hud.py" >/dev/null; then
+	echo "HUD viewer is already running."
+	exit 0
+fi
 
 # Launch the HUD viewer (target box, flight data from PX4) if OpenCV, Gazebo transport and pymavlink are available
 if python3 -c "import cv2, gz.transport13, pymavlink" 2>/dev/null; then
