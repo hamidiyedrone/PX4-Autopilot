@@ -12,9 +12,9 @@
 # window (tools/view.sh; QGroundControl's video source must stay disabled).
 #
 #   make px4_sitl                                   # once (and after airframe changes)
-#   Tools/simulation/interceptor_sim/sim.sh         # GUI
-#   GUI=0 Tools/simulation/interceptor_sim/sim.sh   # No Gazebo 3D GUI (Camera HUD only, max RTF)
-#   HEADLESS=1 Tools/simulation/interceptor_sim/sim.sh
+#   Tools/simulation/interceptor_sim/sim.sh         # Headless Gazebo + Camera HUD (fast RTF, default)
+#   GUI=1 Tools/simulation/interceptor_sim/sim.sh   # Open heavy Gazebo 3D GUI window as well
+#   HEADLESS=1 Tools/simulation/interceptor_sim/sim.sh # Pure headless (no windows at all)
 #
 #   PX4 instance 0: interceptor, in the foreground (pxh> shell)
 #                   QGroundControl: udp 14550 (MAV_SYS_ID 1), API/offboard: udp 14540
@@ -29,7 +29,7 @@
 #   DETECTOR          0: do not start tools/sim_detector.py (no vision detections)
 #   TARGET_POSE       x,y,z,roll,pitch,yaw of the target spawn. The model origin is its
 #                     CG, 0.12 m above the belly. Default: worlds/<WORLD>.env, else 0,0,0.15,0,0,0
-#   GUI / GZ_GUI      0: do not open heavy Gazebo 3D GUI window (keeps HUD camera window, max RTF)
+#   GUI / GZ_GUI      1: open heavy Gazebo 3D GUI window (default: 0, off for high RTF)
 #   HEADLESS          1: no Gazebo GUI, no camera window, no target GUI
 #   VIEW              0: do not open the camera window
 #   NVIDIA_OFFLOAD    0: do not force rendering on the NVIDIA GPU (hybrid graphics laptops)
@@ -40,13 +40,17 @@
 #                     target (worlds/<WORLD>.env), height from models/interceptor/model.sdf
 #
 # Arguments:
-#   --no-gui          Disable Gazebo 3D GUI (only camera HUD window, maximizes RTF)
+#   --gui             Open Gazebo 3D GUI window (heavier on GPU)
+#   --no-gui          Disable Gazebo 3D GUI (default, camera HUD window only, max RTF)
 #   --headless        Disable all GUIs and windows
 
 set -e
 
 for arg in "$@"; do
 	case "${arg}" in
+		--gui)
+			GZ_GUI=1
+			;;
 		--no-gui|--headless-gz|--cam-only)
 			GZ_GUI=0
 			;;
@@ -59,7 +63,7 @@ for arg in "$@"; do
 	esac
 done
 
-GZ_GUI="${GZ_GUI:-${GUI:-1}}"
+GZ_GUI="${GZ_GUI:-${GUI:-0}}"
 if [ -n "${HEADLESS}" ]; then
 	GZ_GUI=0
 fi
