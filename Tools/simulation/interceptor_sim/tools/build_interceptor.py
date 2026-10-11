@@ -780,7 +780,6 @@ param set-default CA_ROTOR_COUNT 4
 
 param set-default THR_MDL_FAC 0.0
 param set-default MPC_THR_HOVER {thr_hover:.2f}
-param set-default MC_YAW_P 2.0
 {cam}
 # fast and aggressive: strong tilt, high speeds / accelerations
 param set-default MPC_TILTMAX_AIR 78
