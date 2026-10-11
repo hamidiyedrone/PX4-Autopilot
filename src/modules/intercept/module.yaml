@@ -15,7 +15,7 @@ parameters:
                 short: Desired terminal standoff distance
                 long: Distance in meters to maintain behind target during close pursuit visual tracking.
             type: float
-            default: 2.5
+            default: 3.0
             min: 1.0
             max: 10.0
             decimal: 1
