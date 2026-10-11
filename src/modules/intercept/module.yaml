@@ -10,103 +10,32 @@ parameters:
             type: boolean
             default: 1
 
-        INT_TGT_SIZE:
+        INT_APN_N:
             description:
-                short: Desired target bounding box width
-                long: Normalized screen width fraction of target for terminal standoff (0.10 to 0.70).
+                short: APN Navigation Constant N
+                long: Proportional navigation gain N for 3D APN guidance law.
             type: float
-            default: 0.50
-            min: 0.10
-            max: 0.70
-            decimal: 2
-
-        INT_MIN_CLOSING:
-            description:
-                short: Minimum closing speed in position guidance
-                long: Minimum relative closing speed (m/s) maintained in midcourse position approach guidance.
-            type: float
-            default: 6.0
+            default: 3.8
             min: 2.0
-            max: 15.0
-            decimal: 1
+            max: 6.0
+            decimal: 2
 
-        INT_KP_OPT:
+        INT_BASKET_D:
             description:
-                short: Optical size error velocity gain
-                long: Proportional speed gain (m/s per normalized size error) commanding forward pursuit speed offset.
+                short: Capture basket offset behind target
+                long: Distance in meters behind target flight line for virtual capture basket.
             type: float
-            default: 5.0
-            min: 0.5
-            max: 15.0
-            decimal: 1
-
-        INT_KD_OPT:
-            description:
-                short: Optical relative velocity damping gain
-                long: Derivative damping gain on optical relative closing speed (m/s) matching target velocity.
-            type: float
-            default: 1.2
-            min: 0.1
+            default: 2.5
+            min: 1.0
             max: 10.0
-            decimal: 2
-
-
-        INT_KP_LAT:
-            description:
-                short: Proportional gain for lateral visual tracking
-                long: Proportional gain (m/s per unit screen error cx - 0.5) for centering target horizontally.
-            type: float
-            default: 2.8
-            min: 0.5
-            max: 15.0
-            decimal: 2
-
-        INT_KP_Z:
-            description:
-                short: Altitude tracking proportional gain
-                long: Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking.
-            type: float
-            default: 1.2
-            min: 0.2
-            max: 5.0
-            decimal: 2
-
-        INT_KP_Z_APP:
-            description:
-                short: Approach mode altitude tracking proportional gain
-                long: Proportional gain (m/s per meter altitude error) for midcourse approach altitude tracking.
-            type: float
-            default: 0.8
-            min: 0.1
-            max: 3.0
-            decimal: 2
-
-        INT_YAW_RATE:
-            description:
-                short: Maximum heading slew rate
-                long: Maximum heading change rate (deg/s) in intercept pursuit guidance.
-            type: float
-            default: 42.0
-            min: 5.0
-            max: 60.0
             decimal: 1
 
-        INT_K_CORNER:
+        INT_ACC_MAX:
             description:
-                short: Adaptive corner braking gain
-                long: Proportional braking gain on (target_size * lateral_drift) reducing forward speed during turns.
+                short: Maximum guidance acceleration command
+                long: Maximum acceleration norm in m/s^2 for trajectory setpoint saturation.
             type: float
-            default: 10.0
-            min: 0.0
-            max: 30.0
-            decimal: 1
-
-        INT_LOST_TIMEOUT:
-            description:
-                short: Visual contact loss timeout
-                long: Time in seconds to steer towards target position and re-acquire visual before reverting to approach.
-            type: float
-            default: 2.0
-            min: 0.5
-            max: 10.0
+            default: 55.0
+            min: 10.0
+            max: 80.0
             decimal: 1

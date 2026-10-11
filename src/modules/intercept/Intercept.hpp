@@ -41,6 +41,7 @@
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionInterval.hpp>
+#include <uORB/topics/actuator_servos.h>
 #include <uORB/topics/arming_check_reply.h>
 #include <uORB/topics/arming_check_request.h>
 #include <uORB/topics/follow_target.h>
@@ -59,9 +60,12 @@ using namespace time_literals;
 class Intercept : public ModuleBase<Intercept>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	enum class GuidanceState : uint8_t {
-		APPROACH = 0,       // Midcourse GPS approach towards target (lead pursuit to visual acquisition range)
-		CLOSE_PURSUIT = 1   // Terminal visual servoing & station-keeping behind target (IBVS)
+	enum class GuidancePhase : uint8_t {
+		STANDBY = 0,
+		APN_CRUISE = 1,     // R_v > 5.0m: 3D Augmented Proportional Navigation
+		BLENDING = 2,       // 2.0m < R_v <= 5.0m: Smooth Blended Transition
+		RENDEZVOUS = 3,     // R_v <= 2.0m: Precision Capture Basket Seating & Velocity Matching PID
+		NET_FIRED = 4       // Target Captured: Net gun deployed
 	};
 
 	Intercept();
@@ -88,10 +92,10 @@ private:
 	void UnregisterFlightMode();
 	void CheckModeRegistration();
 	void ReplyToArmingCheck(uint8_t request_id);
-	void UpdateTarget();
+	void UpdateTarget(float dt);
 	void UpdateVisualDetection();
-	void ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
-	void ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cmd, float dt);
+	void CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::Vector3f &self_vel, const matrix::Vector3f &u_t);
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -108,6 +112,7 @@ private:
 	uORB::Publication<unregister_ext_component_s> _unregister_ext_component_pub{ORB_ID(unregister_ext_component)};
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
+	uORB::Publication<actuator_servos_s> _actuator_servos_pub{ORB_ID(actuator_servos)};
 
 	// Registration state
 	bool _sent_mode_registration{false};
@@ -122,67 +127,41 @@ private:
 	matrix::Vector3f _hold_position{};
 	float _hold_yaw{0.f};
 
-	GuidanceState _guidance_state{GuidanceState::APPROACH};
+	GuidancePhase _guidance_phase{GuidancePhase::STANDBY};
 	vehicle_attitude_s _vehicle_attitude{};
 	vehicle_local_position_s _local_pos{};
 
-	// Target state from GPS (follow_target)
+	// Target state from ground truth / follow_target
 	MapProjection _map_ref{};
 	matrix::Vector3f _target_pos{};
 	matrix::Vector3f _target_vel{};
+	matrix::Vector3f _target_accel{};
 	bool _target_pos_valid{false};
 	hrt_abstime _last_target_update{0};
+	hrt_abstime _last_loop_time{0};
 
-	// Visual detection state from seeker camera (target_detection)
+	// Virtual capture basket and rendezvous states
+	matrix::Vector3f _pos_integral{};
+	matrix::Vector3f _last_a_cmd{};
+	float _last_yaw_cmd{0.f};
+	float _last_R_v{0.f};
+	float _last_V_c{0.f};
+
+	// Net launcher firing envelope states
+	uint32_t _firing_counter{0};
+	bool _net_fired{false};
+	hrt_abstime _net_fire_time{0};
+
+	// Visual detection state (from camera seeker / pose model)
 	target_detection_s _target_detection{};
 	bool _visual_contact{false};
 	float _visual_range{0.f};
 	hrt_abstime _last_visual_contact{0};
 
-	// Coasting velocity and yaw during visual frame drops
-	matrix::Vector3f _last_vel_cmd{};
-	float _last_yaw_cmd{0.f};
-	bool _last_cmd_valid{false};
-
-	// Predictive intermediate extrapolation (100 Hz guidance with 50/80 FPS camera)
-	matrix::Vector3f _vel_cmd_dot{};
-	float _yaw_cmd_dot{0.f};
-	hrt_abstime _last_fresh_visual_time{0};
-	bool _has_fresh_visual{false};
-
-	// Continuous forward speed and acceleration state (unified across APPROACH & CLOSE_PURSUIT)
-	float _fwd_speed_cmd{45.f};
-	float _fwd_accel_cmd{0.f};
-	bool _speed_initialized{false};
-
-	// Optical looming state (IBVS PD)
-	float _last_w{0.50f};
-	float _last_cx{0.5f};
-	float _last_cy{0.5f};
-	float _filt_d_w_dt{0.f};
-	hrt_abstime _last_visual_time{0};
-
-	// Approach guidance closing rate state
-	float _last_approach_dist{-1.f};
-	float _filt_closing_speed{0.f};
-	hrt_abstime _last_approach_time{0};
-
-	// Line-of-sight unit vector in inertial NED frame
-	matrix::Vector3f _last_los_ned{};
-	bool _los_ned_valid{false};
-
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
-		(ParamFloat<px4::params::INT_TGT_SIZE>) _param_int_tgt_size,
-		(ParamFloat<px4::params::INT_MIN_CLOSING>) _param_int_min_closing,
-		(ParamFloat<px4::params::INT_KP_OPT>) _param_int_kp_opt,
-		(ParamFloat<px4::params::INT_KD_OPT>) _param_int_kd_opt,
-		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
-		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
-		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
-		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
-		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate,
-		(ParamFloat<px4::params::INT_K_CORNER>) _param_int_k_corner,
-		(ParamFloat<px4::params::INT_LOST_TIMEOUT>) _param_int_lost_timeout
+		(ParamFloat<px4::params::INT_APN_N>) _param_int_apn_n,
+		(ParamFloat<px4::params::INT_BASKET_D>) _param_int_basket_d,
+		(ParamFloat<px4::params::INT_ACC_MAX>) _param_int_acc_max
 	)
 };
