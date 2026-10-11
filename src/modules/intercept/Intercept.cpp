@@ -474,11 +474,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// Vertical altitude tracking with deadband corridor (+/- 0.15m)
-	// Pure optical visual guidance: does NOT assume or require target GPS, barometer, or telemetry!
-	// Computes physical altitude difference directly from optical line-of-sight elevation and estimated distance:
-	const float w_safe = math::max(w, 0.02f);
-	const float est_dist = math::constrain(1.5f / w_safe, 1.0f, 50.0f);
-	const float delta_z = est_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
+	// Computes physical altitude difference directly from optical line-of-sight elevation and metric distance:
+	const float delta_z = current_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
 	constexpr float Z_TOL = 0.15f; // +/- 15 cm deadband corridor
 	float delta_z_corr = 0.0f;
@@ -491,7 +488,10 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	const float kp_z = _param_int_kp_z.get();
-	const float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
+	float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
+	if (fabsf(delta_z_corr) < FLT_EPSILON) {
+		vz_desired = 0.0f;
+	}
 
 	// Slew-rate limit vertical acceleration (max 1.5 m/s^2) to prevent pitch oscillations
 	if (_last_cmd_valid && dt > 0.005f) {
