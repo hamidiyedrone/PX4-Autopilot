@@ -23,9 +23,11 @@ Mirrored wire format: src/drivers/target_vision/target_vision_protocol.h
 """
 
 import argparse
+import collections
 import math
 import os
 import queue
+import random
 import re
 import socket
 import struct
@@ -162,6 +164,14 @@ def main():
                     help="image width [px], default: from interceptor.yaml")
     ap.add_argument("--height", type=int, default=None,
                     help="image height [px], default: from interceptor.yaml")
+    ap.add_argument("--noise", action=argparse.BooleanOptionalAction, default=True,
+                    help="enable realistic detector noise (jitter, dropout, latency); default True")
+    ap.add_argument("--noise-bbox", type=float, default=None,
+                    help="bbox jitter base stddev [px], default: from interceptor.yaml or 2.5")
+    ap.add_argument("--noise-dropout", type=float, default=None,
+                    help="detection dropout probability [0..1], default: from interceptor.yaml or 0.03")
+    ap.add_argument("--noise-latency", type=int, default=None,
+                    help="detection latency [frames], default: from interceptor.yaml or 1")
     a = ap.parse_args()
 
     # camera intrinsics: from interceptor.yaml unless overridden
@@ -169,6 +179,7 @@ def main():
     with open(os.path.join(SIM_DIR, "interceptor.yaml")) as f:
         cfg = yaml.safe_load(f)
     cam = cfg.get("camera", {})
+    a.max_range = a.max_range if a.max_range != 75.0 else cam.get("max_range_m", 50.0)
     width  = a.width  or cam.get("width", 1280)
     height = a.height or cam.get("height", 720)
     hfov   = a.hfov   or cam.get("hfov_deg", 60.0)
@@ -177,6 +188,13 @@ def main():
     fx = width  / 2 / math.tan(hfov_rad / 2)
     fy = fx  # square pixels
     cx, cy = width / 2, height / 2
+
+    # Noise parameters
+    noise_cfg = cam.get("noise", {})
+    noise_enabled = a.noise if a.noise is not None else noise_cfg.get("enabled", True)
+    noise_bbox_px = a.noise_bbox if a.noise_bbox is not None else noise_cfg.get("bbox_px", 2.5)
+    noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.03)
+    noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 1)
 
     # Talon vertices for bounding box projection
     try:
@@ -273,10 +291,12 @@ def main():
     pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
     rate_desc = f"{a.rate:.0f} Hz" if a.rate > 0 else "frame-driven (unbounded)"
+    noise_desc = (f"noise [jitter {noise_bbox_px:.1f}px, drop {noise_dropout_rate*100:.0f}%, delay {noise_latency_frames}f]"
+                  if noise_enabled else "noise [off]")
     print(f"sim_detector: {a.interceptor} camera → {a.target}, "
           f"udp {a.port}, {rate_desc}, max range {a.max_range:.0f} m, "
           f"FOV {hfov:.0f}°×{math.degrees(vfov_rad):.0f}°, "
-          f"{width}×{height}")
+          f"{width}×{height}, {noise_desc}")
 
     # wait for both models
     while a.interceptor not in state["poses"] or a.target not in state["poses"]:
@@ -307,6 +327,21 @@ def main():
     last_visible = False
     last_bbox = None
     last_seen_time = 0.0
+
+    # Detection latency queue and colored noise state
+    latency_queue = collections.deque()
+    bbox_noise_state = np.zeros(4)  # [cx, cy, w, h]
+
+    def dispatch_packet(pkt_to_send, msg_to_send):
+        if not noise_enabled or noise_latency_frames <= 0:
+            sock.sendto(pkt_to_send, dest)
+            pub_detection.publish(msg_to_send)
+            return
+        latency_queue.append((pkt_to_send, msg_to_send))
+        while len(latency_queue) > noise_latency_frames:
+            p_out, m_out = latency_queue.popleft()
+            sock.sendto(p_out, dest)
+            pub_detection.publish(m_out)
 
     while True:
         if a.rate > 0:
@@ -414,10 +449,9 @@ def main():
             last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
-            sock.sendto(pkt, dest)
             msg_det = Double_V()
             msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
-            pub_detection.publish(msg_det)
+            dispatch_packet(pkt, msg_det)
             continue
 
         # line of sight: unit vector camera → target in optical frame
@@ -436,10 +470,9 @@ def main():
             last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
-            sock.sendto(pkt, dest)
             msg_det = Double_V()
             msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
-            pub_detection.publish(msg_det)
+            dispatch_packet(pkt, msg_det)
             continue
 
         # --- target is visible ---
@@ -495,24 +528,46 @@ def main():
 
                 if bw_clip > 0.5 and bh_clip > 0.5 and vis_ratio >= (2.0 / 3.0):
                     visible = True
-                    bbox = [
-                        float((u_clip_min + u_clip_max) / 2.0 / width),   # cx normalised [0, 1]
-                        float((v_clip_min + v_clip_max) / 2.0 / height),  # cy normalised [0, 1]
-                        float(bw_clip / width),                           # w normalised
-                        float(bh_clip / height),                          # h normalised
-                    ]
-                    last_visible = True
-                    last_bbox = bbox
-                    last_seen_time = t_sim
+                    # Random dropout (false negative frame)
+                    if noise_enabled and noise_dropout_rate > 0.0 and random.random() < noise_dropout_rate:
+                        visible = False
+
+                    if visible:
+                        cx_raw = (u_clip_min + u_clip_max) / 2.0 / width
+                        cy_raw = (v_clip_min + v_clip_max) / 2.0 / height
+                        w_raw = bw_clip / width
+                        h_raw = bh_clip / height
+
+                        if noise_enabled and noise_bbox_px > 0.0:
+                            # Distance-adaptive jitter: ~1.5px close up, ~3.5px at max range (50m)
+                            dist_scale = float(np.clip(1.2 + (range_m / 50.0) * 2.3, 1.2, 3.8)) * (noise_bbox_px / 2.5)
+                            drift = np.random.normal(0.0, 1.0, 4)
+                            bbox_noise_state = 0.65 * bbox_noise_state + 0.35 * drift
+
+                            d_cx = bbox_noise_state[0] * dist_scale / width
+                            d_cy = bbox_noise_state[1] * dist_scale / height
+                            d_w  = bbox_noise_state[2] * dist_scale / width
+                            d_h  = bbox_noise_state[3] * dist_scale / height
+
+                            cx_noisy = float(np.clip(cx_raw + d_cx, 0.0, 1.0))
+                            cy_noisy = float(np.clip(cy_raw + d_cy, 0.0, 1.0))
+                            w_noisy  = float(np.clip(w_raw + d_w, 0.01, 1.0))
+                            h_noisy  = float(np.clip(h_raw + d_h, 0.01, 1.0))
+                            bbox = [cx_noisy, cy_noisy, w_noisy, h_noisy]
+                        else:
+                            bbox = [float(cx_raw), float(cy_raw), float(w_raw), float(h_raw)]
+
+                        last_visible = True
+                        last_bbox = bbox
+                        last_seen_time = t_sim
 
         if not visible:
             last_visible = False
             pkt = pack_packet(frame_id, 0, 0, 0,
                               [0, 0, 1], 0, 0, [1, 0, 0, 0], [0, 0, 0, 0])
-            sock.sendto(pkt, dest)
             msg_det = Double_V()
             msg_det.data.extend([0.0, 0.0, 0.0, 0.0, float(range_m), 0.0])
-            pub_detection.publish(msg_det)
+            dispatch_packet(pkt, msg_det)
             continue
 
         if gimbal_enabled:
@@ -529,8 +584,12 @@ def main():
             q_out = [float(q[0]), float(q[1]), float(q[2]), float(q[3])]
             flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
 
-        confidence = 255  # perfect detection
-        range_sigma = 0.1  # negligible uncertainty for ground truth
+        if noise_enabled:
+            conf_val = 255.0 - (range_m / 50.0) * 35.0 + random.gauss(0.0, 4.0)
+            confidence = int(np.clip(conf_val, 170, 255))
+        else:
+            confidence = 255
+        range_sigma = 0.1 if not noise_enabled else float(np.clip(0.1 + (range_m / 50.0) * 0.8, 0.1, 1.0))
 
         pkt = pack_packet(
             frame_id, 0, flags, confidence,
@@ -539,10 +598,9 @@ def main():
             q_out,
             bbox
         )
-        sock.sendto(pkt, dest)
         msg_det = Double_V()
         msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_m), 1.0])
-        pub_detection.publish(msg_det)
+        dispatch_packet(pkt, msg_det)
 
         # periodic status
         if t_sim - last_print >= 5.0:

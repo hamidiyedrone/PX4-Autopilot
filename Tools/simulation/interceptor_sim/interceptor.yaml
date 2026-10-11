@@ -66,6 +66,12 @@ camera:                 # nose seeker camera, streamed on udp 5600 by plugins/ca
   hfov_deg: 60
   rate: 60              # 60 FPS camera capture (keeps RTF high and stable)
   detect_port: 15600    # udp port of target_vision driver
+  max_range_m: 50.0     # max vision detection range [m]
+  noise:
+    enabled: true
+    bbox_px: 2.5        # pixel jitter base stddev (1.5-3.5px distance adaptive)
+    dropout_rate: 0.03  # 3% frame detection dropout (false negatives)
+    latency_frames: 1   # 1 frame vision inference latency
 
 gimbal:                 # 2-axis nose seeker gimbal (yaw +/-45 deg, pitch +/-45 deg)
   enabled: true
