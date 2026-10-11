@@ -62,8 +62,8 @@ aero:
 camera:                 # nose seeker camera, streamed on udp 5600 by plugins/camera_stream
   enabled: true
   width: 800
-  height: 450
-  hfov_deg: 60
+  height: 656           # 800x656 with 80 deg HFOV yields 69 deg VFOV
+  hfov_deg: 80          # 80 deg horizontal FOV
   rate: 60              # 60 FPS camera capture (keeps RTF high and stable)
   detect_port: 15600    # udp port of target_vision driver
   max_range_m: 50.0     # max vision detection range [m]
