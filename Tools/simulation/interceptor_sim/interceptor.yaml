@@ -61,17 +61,17 @@ aero:
 
 camera:                 # nose seeker camera, streamed on udp 5600 by plugins/camera_stream
   enabled: true
-  width: 800
-  height: 656           # 800x656 with 80 deg HFOV yields 69 deg VFOV
+  width: 720
+  height: 590           # 720x590 with 80 deg HFOV yields 69 deg VFOV
   hfov_deg: 80          # 80 deg horizontal FOV
-  rate: 60              # 60 FPS camera capture (keeps RTF high and stable)
+  rate: 50              # 50 FPS camera capture (keeps RTF high and stable)
   detect_port: 15600    # udp port of target_vision driver
   max_range_m: 50.0     # max vision detection range [m]
   noise:
     enabled: true
     bbox_px: 4.0        # pixel jitter stddev at max range (50m), scales proportionally with distance
     dropout_rate: 0.05  # frame detection dropout at max range (50m), scales proportionally with distance
-    latency_frames: 1   # 1 frame vision inference latency (16ms)
+    latency_frames: 1   # 1 frame vision inference latency (20ms at 50fps)
     range_noise_m: 0.15 # range estimation jitter stddev at max range (50m), scales proportionally with distance
 
 gimbal:                 # 2-axis nose seeker gimbal (yaw +/-45 deg, pitch +/-45 deg)

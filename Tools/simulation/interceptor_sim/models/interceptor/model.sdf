@@ -391,10 +391,10 @@
       <sensor name="nose_camera" type="camera">
         <pose>0 0 0 0 -1.5708 0</pose>
         <always_on>1</always_on>
-        <update_rate>60</update_rate>
+        <update_rate>50</update_rate>
         <camera>
           <horizontal_fov>1.3963</horizontal_fov>
-          <image><width>800</width><height>656</height><format>R8G8B8</format></image>
+          <image><width>720</width><height>590</height><format>R8G8B8</format></image>
           <clip><near>0.1</near><far>3000</far></clip>
         </camera>
       </sensor>

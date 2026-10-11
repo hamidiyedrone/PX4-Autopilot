@@ -315,7 +315,7 @@ def main():
             break
 
     frame_id = 0
-    fallback_rate = a.rate if a.rate > 0 else 60.0
+    fallback_rate = a.rate if a.rate > 0 else float(cam.get("rate", 50.0))
     dt_fallback = 1.0 / fallback_rate
     last_send = 0.0
     last_sim_time = 0.0
