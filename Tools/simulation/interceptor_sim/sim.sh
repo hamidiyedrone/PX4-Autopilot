@@ -23,7 +23,8 @@
 #   WORLD             Gazebo world name (default: ankara, see tools/build_world.py)
 #   TARGET_AUTO       0: do not start tools/target_sim.py (the target stays on the runway)
 #   TARGET_PATTERN    flight path pattern: straight (default), weave, orbit, square
-#   TARGET_GUI        1: start tools/target_gui.py PySide6 control panel (0 to disable)
+#   CONTROL_PANEL     1: start tools/control_panel.py PySide6 Control Panel (0 to disable);
+#                     it is the ground station on udp 14550, set 0 to use QGroundControl
 #   TARGET_ARGS       arguments for tools/target_sim.py, e.g. "--alt 60 --speed 18"
 #   RELAY             0: do not start tools/ground_relay.py (no FOLLOW_TARGET to the interceptor)
 #   DETECTOR          0: do not start tools/sim_detector.py (no vision detections)
@@ -181,7 +182,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud|target_gui).py"); do
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud|control_panel).py"); do
 		pids+=("${p}")
 	done
 
@@ -247,9 +248,9 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 	echo "Target: tools/target_sim.py in the background, log: ${SCRIPT_DIR}/build/target_sim.log"
 	echo "        position: http://localhost:8000/target (2 Hz), ADS-B in QGroundControl"
 
-	if [ "${TARGET_GUI:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
-		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/target_gui.py" > "${SCRIPT_DIR}/build/target_gui.log" 2>&1 &
-		echo "Target GUI: tools/target_gui.py in the background, log: ${SCRIPT_DIR}/build/target_gui.log"
+	if [ "${CONTROL_PANEL:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
+		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/control_panel.py" > "${SCRIPT_DIR}/build/control_panel.log" 2>&1 &
+		echo "Control Panel: tools/control_panel.py in the background, log: ${SCRIPT_DIR}/build/control_panel.log"
 	fi
 
 	if [ "${RELAY:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
