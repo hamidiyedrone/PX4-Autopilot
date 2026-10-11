@@ -28,6 +28,15 @@ bool GZGimbal::init(const std::string &world_name, const std::string &model_name
 		return false;
 	}
 
+	const std::string seeker_roll_topic = "/model/" + model_name + "/command/seeker_roll";
+	_seeker_roll_cmd_publisher = _node.Advertise<gz::msgs::Double>(seeker_roll_topic);
+
+	const std::string seeker_pitch_topic = "/model/" + model_name + "/command/seeker_pitch";
+	_seeker_pitch_cmd_publisher = _node.Advertise<gz::msgs::Double>(seeker_pitch_topic);
+
+	const std::string seeker_yaw_topic = "/model/" + model_name + "/command/seeker_yaw";
+	_seeker_yaw_cmd_publisher = _node.Advertise<gz::msgs::Double>(seeker_yaw_topic);
+
 	const std::string gimbal_imu_topic = "/world/" + world_name + "/model/" + model_name +
 					     "/link/camera_link/sensor/camera_imu/imu";
 
@@ -74,11 +83,26 @@ void GZGimbal::Run()
 	updateParameters();
 
 	if (pollSetpoint()) {
-		//TODO handle device flags
 		publishJointCommand(_gimbal_roll_cmd_publisher, _roll_stp, _roll_rate_stp, _last_roll_stp, _roll_min, _roll_max, dt);
 		publishJointCommand(_gimbal_pitch_cmd_publisher, _pitch_stp, _pitch_rate_stp, _last_pitch_stp, _pitch_min, _pitch_max,
 				    dt);
 		publishJointCommand(_gimbal_yaw_cmd_publisher, _yaw_stp, _yaw_rate_stp, _last_yaw_stp, _yaw_min, _yaw_max, dt);
+
+		if (_seeker_roll_cmd_publisher.Valid()) {
+			gz::msgs::Double msg_r;
+			msg_r.set_data(_last_roll_stp);
+			_seeker_roll_cmd_publisher.Publish(msg_r);
+		}
+		if (_seeker_pitch_cmd_publisher.Valid()) {
+			gz::msgs::Double msg_p;
+			msg_p.set_data(_last_pitch_stp);
+			_seeker_pitch_cmd_publisher.Publish(msg_p);
+		}
+		if (_seeker_yaw_cmd_publisher.Valid()) {
+			gz::msgs::Double msg_y;
+			msg_y.set_data(_last_yaw_stp);
+			_seeker_yaw_cmd_publisher.Publish(msg_y);
+		}
 	}
 
 	if (_mnt_mode_out == 2) {
@@ -135,7 +159,22 @@ bool GZGimbal::pollSetpoint()
 		gimbal_device_set_attitude_s msg;
 
 		if (_gimbal_device_set_attitude_sub.copy(&msg)) {
-			const matrix::Eulerf gimbal_att_stp(matrix::Quatf(msg.q));
+			matrix::Quatf q_cmd(msg.q);
+
+			// Handle device flags: if locked to earth frame (NED), transform to vehicle body frame
+			const bool is_locked = (msg.flags & (gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_ROLL_LOCK |
+							     gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_PITCH_LOCK |
+							     gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_YAW_LOCK));
+
+			if (is_locked) {
+				vehicle_attitude_s v_att;
+				if (_vehicle_attitude_sub.copy(&v_att)) {
+					const matrix::Quatf q_vehicle(v_att.q);
+					q_cmd = q_vehicle.inversed() * q_cmd;
+				}
+			}
+
+			const matrix::Eulerf gimbal_att_stp(q_cmd);
 			_roll_stp = gimbal_att_stp.phi();
 			_pitch_stp = gimbal_att_stp.theta();
 			_yaw_stp = gimbal_att_stp.psi();

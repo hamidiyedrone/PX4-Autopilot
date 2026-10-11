@@ -124,7 +124,8 @@ void Intercept::ReplyToArmingCheck(uint8_t request_id)
 void Intercept::UpdateTarget(float dt)
 {
 	// 1. Maintain local map projection reference from local position
-	if (_local_pos.xy_global && _local_pos.z_global) {
+	if (PX4_ISFINITE(_local_pos.ref_lat) && PX4_ISFINITE(_local_pos.ref_lon)
+	    && (fabsf((float)_local_pos.ref_lat) > 0.0001f || fabsf((float)_local_pos.ref_lon) > 0.0001f)) {
 		if (!_map_ref.isInitialized()
 		    || _map_ref.getProjectionReferenceTimestamp() != _local_pos.ref_timestamp) {
 			_map_ref.initReference(_local_pos.ref_lat, _local_pos.ref_lon, _local_pos.ref_timestamp);
@@ -133,45 +134,76 @@ void Intercept::UpdateTarget(float dt)
 
 	// 2. Read new follow_target messages from ground truth / ground relay
 	if (_follow_target_sub.updated()) {
-		follow_target_s ft;
-
-		if (_follow_target_sub.copy(&ft)) {
-			const double target_lat = ft.lat;
-			const double target_lon = ft.lon;
-
-			if (_map_ref.isInitialized() && PX4_ISFINITE(target_lat) && PX4_ISFINITE(target_lon)) {
-				float x{0.f};
-				float y{0.f};
-				_map_ref.project(target_lat, target_lon, x, y);
-
-				const hrt_abstime now = hrt_absolute_time();
-				const matrix::Vector3f new_target_vel(ft.vx, ft.vy, ft.vz);
-
-				if (_last_target_update > 0 && now > _last_target_update) {
-					const float dt_meas = (float)(now - _last_target_update) * 1e-6f;
-
-					if (dt_meas > 0.005f && dt_meas < 1.0f) {
-						const matrix::Vector3f raw_accel = (new_target_vel - _target_vel) / dt_meas;
-						// Singer maneuver / low-pass filter on target acceleration
-						const float alpha = math::constrain(dt_meas / 0.15f, 0.10f, 0.80f);
-						_target_accel = _target_accel * (1.0f - alpha) + raw_accel * alpha;
-					}
-				}
-
-				_target_pos(0) = x;
-				_target_pos(1) = y;
-				_target_pos(2) = -(ft.alt - _local_pos.ref_alt);
-				_target_vel = new_target_vel;
-
-				_target_pos_valid = true;
-				_last_target_update = now;
-			}
+		if (_follow_target_sub.copy(&_last_follow_target)) {
+			_has_follow_target = true;
 		}
+	}
 
-	} else if (_target_pos_valid && dt > 0.001f && dt < 0.05f) {
-		// 100 Hz kinematic dead-reckoning extrapolation between target telemetry frames
-		_target_pos += _target_vel * dt + _target_accel * (0.5f * dt * dt);
-		_target_vel += _target_accel * dt;
+	bool new_sample_processed = false;
+
+	if (_has_follow_target && _map_ref.isInitialized()
+	    && PX4_ISFINITE(_last_follow_target.lat) && PX4_ISFINITE(_last_follow_target.lon)) {
+
+		if (_last_follow_target.timestamp != _last_target_rx_time) {
+			_last_target_rx_time = _last_follow_target.timestamp;
+
+			float x{0.f};
+			float y{0.f};
+			_map_ref.project(_last_follow_target.lat, _last_follow_target.lon, x, y);
+
+			const hrt_abstime now = hrt_absolute_time();
+			const matrix::Vector3f new_target_vel(_last_follow_target.vx, _last_follow_target.vy, _last_follow_target.vz);
+
+			if (_last_target_update > 0 && now > _last_target_update) {
+				const float dt_meas = (float)(now - _last_target_update) * 1e-6f;
+
+				if (dt_meas > 0.005f && dt_meas < 1.0f) {
+					const matrix::Vector3f raw_accel = (new_target_vel - _target_vel) / dt_meas;
+					// Singer maneuver / low-pass filter on target acceleration
+					const float alpha = math::constrain(dt_meas / 0.15f, 0.10f, 0.80f);
+					_target_accel = _target_accel * (1.0f - alpha) + raw_accel * alpha;
+				}
+			}
+
+			_target_pos(0) = x;
+			_target_pos(1) = y;
+			_target_pos(2) = -(_last_follow_target.alt - _local_pos.ref_alt);
+			_target_vel = new_target_vel;
+
+			_target_pos_valid = true;
+			_last_target_update = now;
+			new_sample_processed = true;
+		}
+	}
+
+	if (!new_sample_processed) {
+		if (_target_pos_valid && dt > 0.001f && dt < 0.05f) {
+			// 100 Hz kinematic dead-reckoning extrapolation between target telemetry frames
+			_target_pos += _target_vel * dt + _target_accel * (0.5f * dt * dt);
+			_target_vel += _target_accel * dt;
+
+		} else if (!_target_pos_valid && _visual_contact && _target_detection.range_valid
+			   && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)) {
+			// Vision fallback if ground-truth follow_target is not active
+			const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+			const matrix::Vector3f los_b(_target_detection.los_body[0], _target_detection.los_body[1], _target_detection.los_body[2]);
+			const matrix::Quatf q_att(_vehicle_attitude.q);
+			const matrix::Vector3f los_ned = q_att.rotateVector(los_b);
+			const matrix::Vector3f vis_target_pos = self_pos + los_ned * _target_detection.range_m;
+
+			const hrt_abstime now = hrt_absolute_time();
+			if (_last_target_update > 0 && now > _last_target_update) {
+				const float dt_meas = (float)(now - _last_target_update) * 1e-6f;
+				if (dt_meas > 0.005f && dt_meas < 1.0f) {
+					const matrix::Vector3f raw_vel = (vis_target_pos - _target_pos) / dt_meas;
+					_target_vel = _target_vel * 0.7f + raw_vel * 0.3f;
+				}
+			}
+
+			_target_pos = vis_target_pos;
+			_target_pos_valid = true;
+			_last_target_update = now;
+		}
 	}
 
 	// 3. Invalidate target if no update for more than 3 seconds
@@ -320,6 +352,34 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	}
 }
 
+void Intercept::PublishGimbalTracking(const matrix::Vector3f &self_pos)
+{
+	const matrix::Vector3f r_target = _target_pos - self_pos;
+	const float r_xy = sqrtf(r_target(0) * r_target(0) + r_target(1) * r_target(1));
+
+	// World NED reference frame: Roll=0.0f (horizon-stabilized), Pitch and Yaw
+	const float roll_ned = 0.0f;
+	const float pitch_ned = atan2f(-r_target(2), math::max(r_xy, 0.01f));
+	const float yaw_ned = atan2f(r_target(1), r_target(0));
+
+	const matrix::Quatf q_gimbal(matrix::Eulerf(roll_ned, pitch_ned, yaw_ned));
+
+	gimbal_device_set_attitude_s gimbal_cmd{};
+	gimbal_cmd.timestamp = hrt_absolute_time();
+	gimbal_cmd.target_system = 0;
+	gimbal_cmd.target_component = 0;
+	gimbal_cmd.flags = gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_ROLL_LOCK |
+			   gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_PITCH_LOCK |
+			   gimbal_device_set_attitude_s::GIMBAL_DEVICE_FLAGS_YAW_LOCK;
+
+	q_gimbal.copyTo(gimbal_cmd.q);
+	gimbal_cmd.angular_velocity_x = NAN;
+	gimbal_cmd.angular_velocity_y = NAN;
+	gimbal_cmd.angular_velocity_z = NAN;
+
+	_gimbal_device_set_attitude_pub.publish(gimbal_cmd);
+}
+
 void Intercept::Run()
 {
 	if (should_exit()) {
@@ -373,6 +433,12 @@ void Intercept::Run()
 	_vehicle_attitude_sub.update(&_vehicle_attitude);
 	UpdateTarget(dt);
 	UpdateVisualDetection();
+
+	// Update 3-axis Storm32 gimbal tracking: continuously keep camera locked on target in world NED frame
+	if (_target_pos_valid) {
+		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+		PublishGimbalTracking(self_pos);
+	}
 
 	// 6. Check if Intercept is currently the active navigation mode
 	vehicle_status_s vehicle_status;
@@ -498,6 +564,11 @@ int Intercept::print_status()
 
 		PX4_INFO("Net Gun Status: %s (Envelope Counter: %u/10)",
 			 _net_fired ? "FIRED!" : "READY", _firing_counter);
+
+		const float r_xy = sqrtf(rel_pos(0) * rel_pos(0) + rel_pos(1) * rel_pos(1));
+		PX4_INFO("Storm32 Gimbal Lock: Pitch: %.1f deg, Yaw: %.1f deg (NED Horizon-Stabilized)",
+			 (double)math::degrees(atan2f(-rel_pos(2), math::max(r_xy, 0.01f))),
+			 (double)math::degrees(atan2f(rel_pos(1), rel_pos(0))));
 
 	} else {
 		PX4_INFO("Target Fix: NO VALID DATA");

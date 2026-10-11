@@ -449,7 +449,7 @@ def main():
 			help="flight path pattern: 'weave' (continuous serpentine S-turns) or 'square' (square circuit)")
 	ap.add_argument("--weave-amp", type=float, default=26.0, help="lateral weave amplitude [m] (controls bank angle)")
 	ap.add_argument("--weave-wavelength", type=float, default=550.0, help="weave cycle wavelength [m]")
-	ap.add_argument("--rate", type=float, default=2.0, help="telemetry rate [Hz]")
+	ap.add_argument("--rate", type=float, default=20.0, help="telemetry rate [Hz]")
 	ap.add_argument("--http-port", type=int, default=8000)
 	ap.add_argument("--adsb", default="udpout:127.0.0.1:14580", help="MAVLink target for ADSB_VEHICLE, '' = off")
 	a = ap.parse_args()

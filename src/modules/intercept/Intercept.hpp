@@ -45,6 +45,7 @@
 #include <uORB/topics/arming_check_reply.h>
 #include <uORB/topics/arming_check_request.h>
 #include <uORB/topics/follow_target.h>
+#include <uORB/topics/gimbal_device_set_attitude.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/register_ext_component_reply.h>
 #include <uORB/topics/register_ext_component_request.h>
@@ -96,6 +97,7 @@ private:
 	void UpdateVisualDetection();
 	void ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cmd, float dt);
 	void CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::Vector3f &self_vel, const matrix::Vector3f &u_t);
+	void PublishGimbalTracking(const matrix::Vector3f &self_pos);
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -113,6 +115,7 @@ private:
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
 	uORB::Publication<actuator_servos_s> _actuator_servos_pub{ORB_ID(actuator_servos)};
+	uORB::Publication<gimbal_device_set_attitude_s> _gimbal_device_set_attitude_pub{ORB_ID(gimbal_device_set_attitude)};
 
 	// Registration state
 	bool _sent_mode_registration{false};
@@ -133,6 +136,9 @@ private:
 
 	// Target state from ground truth / follow_target
 	MapProjection _map_ref{};
+	follow_target_s _last_follow_target{};
+	bool _has_follow_target{false};
+	uint64_t _last_target_rx_time{0};
 	matrix::Vector3f _target_pos{};
 	matrix::Vector3f _target_vel{};
 	matrix::Vector3f _target_accel{};

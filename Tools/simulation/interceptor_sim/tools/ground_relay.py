@@ -66,7 +66,7 @@ def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--url", default="http://localhost:8000/target", help="target JSON")
 	ap.add_argument("--link", default="udpout:127.0.0.1:14580", help="MAVLink connection to the interceptor")
-	ap.add_argument("--poll", type=float, default=10.0, help="server poll rate [Hz]")
+	ap.add_argument("--poll", type=float, default=20.0, help="server poll rate [Hz]")
 	ap.add_argument("--stale", type=float, default=2.0, help="warn when no new sample for this long [s]")
 	ap.add_argument("--sysid", type=int, default=250, help="MAVLink system id of the relay")
 	a = ap.parse_args()
