@@ -418,16 +418,32 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Clamp commanded velocity delta to prevent abrupt pitch swings
 	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
 
+	// Adaptive lateral corner/swerve braking when close (< 5m):
+	// If the target shifts laterally away from boresight center, brake forward speed
+	// to tighten turn radius and prevent overshooting / cutting past the target.
+	float corner_brake = 0.0f;
+	if (current_dist < 5.0f) {
+		const float lat_offset = fabsf(cx - 0.50f);
+		constexpr float LAT_BRAKE_DEADBAND = 0.08f; // center corridor [0.42, 0.58]
+		if (lat_offset > LAT_BRAKE_DEADBAND) {
+			const float lat_drift = lat_offset - LAT_BRAKE_DEADBAND;
+			corner_brake = math::constrain(lat_drift * 15.0f, 0.0f, 5.0f);
+		}
+	}
+
 	// Commanded forward speed referenced to smooth optical target speed estimate
-	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v, 15.0f, max_xy_vel);
+	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v - corner_brake, 10.0f, max_xy_vel);
 
 	// Slew-rate limit forward speed command in close pursuit
-	// Smooth rate limit (max 2.0 m/s^2) completely eliminates pitch bobbing / 1 Hz oscillations!
+	// Smooth positive accel (max 2.0 m/s^2) eliminates pitch bobbing,
+	// while allowing slightly crisper braking (max 3.5 m/s^2) to prevent corner overshoot.
 	constexpr float MAX_CLOSE_ACCEL = 2.0f;
+	constexpr float MAX_CLOSE_DECEL = 3.5f;
 	const float prev_speed_cmd = _fwd_speed_cmd;
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dv = MAX_CLOSE_ACCEL * dt;
-		_fwd_speed_cmd = math::constrain(desired_fwd_speed, _fwd_speed_cmd - max_dv, _fwd_speed_cmd + max_dv);
+		const float max_dv_acc = MAX_CLOSE_ACCEL * dt;
+		const float max_dv_dec = MAX_CLOSE_DECEL * dt;
+		_fwd_speed_cmd = math::constrain(desired_fwd_speed, _fwd_speed_cmd - max_dv_dec, _fwd_speed_cmd + max_dv_acc);
 		_fwd_accel_cmd = (_fwd_speed_cmd - prev_speed_cmd) / dt;
 	} else {
 		_fwd_speed_cmd = desired_fwd_speed;
