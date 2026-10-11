@@ -35,7 +35,7 @@ parameters:
                 short: Optical size error velocity gain
                 long: Proportional speed gain (m/s per normalized size error) commanding forward pursuit speed offset.
             type: float
-            default: 5.0
+            default: 6.0
             min: 0.5
             max: 15.0
             decimal: 1
@@ -45,7 +45,7 @@ parameters:
                 short: Optical relative velocity damping gain
                 long: Derivative damping gain on optical relative closing speed (m/s) matching target velocity.
             type: float
-            default: 1.2
+            default: 1.5
             min: 0.1
             max: 10.0
             decimal: 2
