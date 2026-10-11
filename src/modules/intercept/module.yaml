@@ -20,6 +20,16 @@ parameters:
             max: 0.70
             decimal: 2
 
+        INT_STANDOFF:
+            description:
+                short: Desired terminal standoff distance
+                long: Distance in meters to maintain behind target during close pursuit visual tracking.
+            type: float
+            default: 2.5
+            min: 1.0
+            max: 10.0
+            decimal: 1
+
         INT_MIN_CLOSING:
             description:
                 short: Minimum closing speed in position guidance

@@ -337,8 +337,6 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float cy = _target_detection.bbox[1]; // [0.0, 1.0], center is 0.50
 	const float w  = _target_detection.bbox[2]; // Target bounding box width fraction
 
-	// Desired visual size setpoint
-	const float desired_w = math::constrain(_param_int_tgt_size.get(), 0.10f, 0.60f);
 
 	// Compute time step for optical derivative estimation
 	float dt = 0.033f; // default 30 Hz
@@ -372,44 +370,43 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		_speed_initialized = true;
 	}
 
-	// 2. Optical Looming Divergence & Self-Speed Referenced Standoff Velocity Control
-	// Estimate bounding box expansion rate (dw/dt)
-	const float raw_d_w_dt = (w - _last_w) / dt;
-	_filt_d_w_dt = 0.80f * _filt_d_w_dt + 0.20f * raw_d_w_dt;
+	// 2. Direct Range-Based Standoff Velocity Control (Pure Optical range_m)
+	const float current_dist = math::max(_target_detection.range_m, 0.5f);
 
-	const float w_safe = math::max(w, 0.02f);
-	const float divergence = _filt_d_w_dt / w_safe; // (dw/dt)/w = V_rel / Dist (1/s)
+	// Estimate metric closing speed (m/s) from distance derivative with PT1 low-pass filter
+	if (_last_visual_dist < 0.0f) {
+		_last_visual_dist = current_dist;
+		_filt_visual_closing_speed = 0.0f;
+	} else if (dt > 0.005f) {
+		const float raw_closing = (_last_visual_dist - current_dist) / dt;
+		constexpr float CLOSING_TAU = 0.15f;
+		const float alpha_close = math::constrain(dt / (CLOSING_TAU + dt), 0.05f, 0.50f);
+		_filt_visual_closing_speed += alpha_close * (math::constrain(raw_closing, -15.0f, 15.0f) - _filt_visual_closing_speed);
+		_last_visual_dist = current_dist;
+	}
 
-	// Optically estimated relative closing velocity: V_rel = Dist * divergence ~ (1.5 / w) * divergence (m/s)
-	// (Positive = closing in, Negative = target pulling away)
-	const float v_rel = math::constrain((1.5f / w_safe) * divergence, -10.0f, 10.0f);
+	const float desired_dist = math::constrain(_param_int_standoff.get(), 1.0f, 10.0f);
+	const float dist_err = current_dist - desired_dist; // positive = too far, negative = too close
 
-	// Bounding box size tolerance corridor (+/- 0.04 around desired_w, e.g. [0.46, 0.54] for desired_w = 0.50)
-	constexpr float W_TOL = 0.04f;
-	const float w_min = desired_w - W_TOL;
-	const float w_max = desired_w + W_TOL;
+	// Desired closing speed tapers smoothly to 0 at standoff distance
+	const float desired_closing = math::constrain(0.40f * dist_err, -3.0f, 5.0f);
+
+	// Closing speed error: difference between actual closing rate and desired closing rate
+	const float closing_err = _filt_visual_closing_speed - desired_closing;
 
 	const float kp_opt = _param_int_kp_opt.get();
 	const float kd_opt = _param_int_kd_opt.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 
+	constexpr float DIST_TOL = 0.25f; // +/- 25 cm corridor around desired_dist
 	float delta_v = 0.0f;
 
-	if (w < w_min) {
-		// Target too far (w < 0.46): drive towards corridor with PD damping
-		const float norm_err_w = (w_min - w) / desired_w;
-		delta_v = kp_opt * norm_err_w - kd_opt * v_rel;
-
-	} else if (w > w_max) {
-		// Target too close (w > 0.54): decelerate back into tolerance corridor
-		const float norm_err_w = (w_max - w) / desired_w; // negative
-		delta_v = kp_opt * norm_err_w - kd_opt * v_rel;
-
+	if (fabsf(dist_err) > DIST_TOL) {
+		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.20f * dist_err, -4.0f, 4.0f);
 	} else {
-		// Target inside [0.46, 0.54] tolerance corridor (~3m +/- 24cm):
-		// Standoff distance is satisfied. Damp residual relative velocity to lock onto target speed!
-		if (fabsf(v_rel) > 0.15f) {
-			delta_v = -kd_opt * v_rel;
+		// Inside corridor: gently damp any residual closing velocity
+		if (fabsf(_filt_visual_closing_speed) > 0.15f) {
+			delta_v = -kd_opt * _filt_visual_closing_speed;
 		} else {
 			delta_v = 0.0f;
 		}
@@ -487,6 +484,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Vertical altitude tracking with deadband corridor (+/- 0.15m)
 	// Pure optical visual guidance: does NOT assume or require target GPS, barometer, or telemetry!
 	// Computes physical altitude difference directly from optical line-of-sight elevation and estimated distance:
+	const float w_safe = math::max(w, 0.02f);
 	const float est_dist = math::constrain(1.5f / w_safe, 1.0f, 50.0f);
 	const float delta_z = est_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
@@ -602,6 +600,8 @@ void Intercept::Run()
 			_last_approach_dist = -1.f;
 			_filt_closing_speed = 0.f;
 			_last_approach_time = 0;
+			_last_visual_dist = -1.f;
+			_filt_visual_closing_speed = 0.f;
 		}
 
 		// State transitions: APPROACH <-> CLOSE_PURSUIT
@@ -612,6 +612,8 @@ void Intercept::Run()
 				_last_visual_time = 0;
 				_los_ned_valid = false;
 				_filt_d_w_dt = 0.f;
+				_last_visual_dist = -1.f;
+				_filt_visual_closing_speed = 0.f;
 
 				_last_w = _target_detection.bbox[2];
 				_last_cx = _target_detection.bbox[0];
@@ -638,6 +640,8 @@ void Intercept::Run()
 				_los_ned_valid = false;
 				_last_approach_dist = -1.f;
 				_last_approach_time = 0;
+				_last_visual_dist = -1.f;
+				_filt_visual_closing_speed = 0.f;
 				PX4_WARN("Visual contact lost (>%.1fs), reverting to APPROACH", (double)_param_int_lost_timeout.get());
 			}
 		}
@@ -776,6 +780,8 @@ void Intercept::Run()
 			_last_approach_dist = -1.f;
 			_filt_closing_speed = 0.f;
 			_last_approach_time = 0;
+			_last_visual_dist = -1.f;
+			_filt_visual_closing_speed = 0.f;
 		}
 	}
 }

@@ -156,6 +156,10 @@ private:
 	float _filt_d_w_dt{0.f};
 	hrt_abstime _last_visual_time{0};
 
+	// Close pursuit visual range closing rate state
+	float _last_visual_dist{-1.f};
+	float _filt_visual_closing_speed{0.f};
+
 	// Approach guidance closing rate state
 	float _last_approach_dist{-1.f};
 	float _filt_closing_speed{0.f};
@@ -168,6 +172,7 @@ private:
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
 		(ParamFloat<px4::params::INT_TGT_SIZE>) _param_int_tgt_size,
+		(ParamFloat<px4::params::INT_STANDOFF>) _param_int_standoff,
 		(ParamFloat<px4::params::INT_MIN_CLOSING>) _param_int_min_closing,
 		(ParamFloat<px4::params::INT_KP_OPT>) _param_int_kp_opt,
 		(ParamFloat<px4::params::INT_KD_OPT>) _param_int_kd_opt,
