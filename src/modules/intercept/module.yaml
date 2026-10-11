@@ -45,7 +45,7 @@ parameters:
                 short: Optical relative velocity damping gain
                 long: Derivative damping gain on optical relative closing speed (m/s) matching target velocity.
             type: float
-            default: 1.0
+            default: 1.2
             min: 0.1
             max: 10.0
             decimal: 2
