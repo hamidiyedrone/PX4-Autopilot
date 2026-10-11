@@ -56,7 +56,7 @@ parameters:
                 short: Proportional gain for lateral visual tracking
                 long: Proportional gain (m/s per unit screen error cx - 0.5) for centering target horizontally.
             type: float
-            default: 2.5
+            default: 2.0
             min: 0.5
             max: 15.0
             decimal: 2

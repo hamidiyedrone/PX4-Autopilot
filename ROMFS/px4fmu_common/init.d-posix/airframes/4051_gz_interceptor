@@ -49,7 +49,7 @@ param set-default SIM_GZ_EC_MAX4 2217
 
 param set-default THR_MDL_FAC 0.0
 param set-default MPC_THR_HOVER 0.27
-param set-default MC_YAW_P 2.5
+param set-default MC_YAW_P 2.0
 
 # nose camera on the thrust axis
 param set-default TGV_MNT_PITCH 90
