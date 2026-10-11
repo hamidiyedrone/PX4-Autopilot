@@ -13,12 +13,13 @@
 #
 #   make px4_sitl                                   # once (and after airframe changes)
 #   Tools/simulation/interceptor_sim/sim.sh         # GUI
+#   GUI=0 Tools/simulation/interceptor_sim/sim.sh   # No Gazebo 3D GUI (Camera HUD only, max RTF)
 #   HEADLESS=1 Tools/simulation/interceptor_sim/sim.sh
 #
 #   PX4 instance 0: interceptor, in the foreground (pxh> shell)
 #                   QGroundControl: udp 14550 (MAV_SYS_ID 1), API/offboard: udp 14540
 #
-# Env:
+# Env / Flags:
 #   WORLD             Gazebo world name (default: ankara, see tools/build_world.py)
 #   TARGET_AUTO       0: do not start tools/target_sim.py (the target stays on the runway)
 #   TARGET_PATTERN    flight path pattern: straight (default), weave, orbit, square
@@ -28,7 +29,8 @@
 #   DETECTOR          0: do not start tools/sim_detector.py (no vision detections)
 #   TARGET_POSE       x,y,z,roll,pitch,yaw of the target spawn. The model origin is its
 #                     CG, 0.12 m above the belly. Default: worlds/<WORLD>.env, else 0,0,0.15,0,0,0
-#   HEADLESS          1: no Gazebo GUI and no camera window
+#   GUI / GZ_GUI      0: do not open heavy Gazebo 3D GUI window (keeps HUD camera window, max RTF)
+#   HEADLESS          1: no Gazebo GUI, no camera window, no target GUI
 #   VIEW              0: do not open the camera window
 #   NVIDIA_OFFLOAD    0: do not force rendering on the NVIDIA GPU (hybrid graphics laptops)
 #   CAMERA_STREAM_ENCODERS  encoder order for the camera streams, default auto
@@ -36,8 +38,31 @@
 #   INTERCEPTOR       0 to start the target only
 #   INTERCEPTOR_POSE  x,y,z,roll,pitch,yaw of the interceptor spawn. Default: next to the
 #                     target (worlds/<WORLD>.env), height from models/interceptor/model.sdf
+#
+# Arguments:
+#   --no-gui          Disable Gazebo 3D GUI (only camera HUD window, maximizes RTF)
+#   --headless        Disable all GUIs and windows
 
 set -e
+
+for arg in "$@"; do
+	case "${arg}" in
+		--no-gui|--headless-gz|--cam-only)
+			GZ_GUI=0
+			;;
+		--headless)
+			HEADLESS=1
+			;;
+		--no-view)
+			VIEW=0
+			;;
+	esac
+done
+
+GZ_GUI="${GZ_GUI:-${GUI:-1}}"
+if [ -n "${HEADLESS}" ]; then
+	GZ_GUI=0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PX4_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
@@ -186,8 +211,10 @@ stop_previous
 echo "Starting Gazebo world ${world_file}"
 ${PDEATH_GZ} gz sim --verbose=1 -r -s "${world_file}" &
 
-if [ -z "${HEADLESS}" ]; then
+if [ -z "${HEADLESS}" ] && [ "${GZ_GUI}" != "0" ]; then
 	${PDEATH_GZ} gz sim -g >/dev/null 2>&1 &
+elif [ -z "${HEADLESS}" ]; then
+	echo "Gazebo 3D GUI disabled (fast headless server mode). Watching via camera HUD window."
 fi
 
 for _ in $(seq 30); do
@@ -251,7 +278,7 @@ if [ "${VIEW:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
 fi
 
 # Track the interceptor in the Gazebo GUI camera from the upper right rear
-if [ -z "${HEADLESS}" ] && [ "${INTERCEPTOR}" != "0" ]; then
+if [ -z "${HEADLESS}" ] && [ "${GZ_GUI}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
 	(
 		sleep 2.5
 		"${SCRIPT_DIR}/tools/cam.sh" rear-right 4 "${INTERCEPTOR_NAME}" >/dev/null 2>&1 || true
