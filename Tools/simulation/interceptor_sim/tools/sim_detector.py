@@ -169,11 +169,11 @@ def main():
     ap.add_argument("--noise-bbox", type=float, default=None,
                     help="bbox jitter base stddev [px], default: from interceptor.yaml or 2.5")
     ap.add_argument("--noise-dropout", type=float, default=None,
-                    help="detection dropout probability [0..1], default: from interceptor.yaml or 0.10")
+                    help="detection dropout probability [0..1], default: from interceptor.yaml or 0.05")
     ap.add_argument("--noise-latency", type=int, default=None,
-                    help="detection latency [frames], default: from interceptor.yaml or 2")
+                    help="detection latency [frames], default: from interceptor.yaml or 1")
     ap.add_argument("--noise-range", type=float, default=None,
-                    help="range measurement jitter stddev [m], default: from interceptor.yaml or 0.30")
+                    help="range measurement jitter stddev [m], default: from interceptor.yaml or 0.15")
     a = ap.parse_args()
 
     # camera intrinsics: from interceptor.yaml unless overridden
@@ -194,10 +194,10 @@ def main():
     # Noise parameters
     noise_cfg = cam.get("noise", {})
     noise_enabled = a.noise if a.noise is not None else noise_cfg.get("enabled", True)
-    noise_bbox_px = a.noise_bbox if a.noise_bbox is not None else noise_cfg.get("bbox_px", 6.0)
-    noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.10)
-    noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 2)
-    noise_range_m = a.noise_range if a.noise_range is not None else noise_cfg.get("range_noise_m", 0.30)
+    noise_bbox_px = a.noise_bbox if a.noise_bbox is not None else noise_cfg.get("bbox_px", 4.0)
+    noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.05)
+    noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 1)
+    noise_range_m = a.noise_range if a.noise_range is not None else noise_cfg.get("range_noise_m", 0.15)
 
     # Talon vertices for bounding box projection
     try:
