@@ -159,6 +159,7 @@ private:
 	// Close pursuit visual range closing rate state
 	float _last_visual_dist{-1.f};
 	float _filt_visual_closing_speed{0.f};
+	float _target_speed_est{25.f};
 
 	// Approach guidance closing rate state
 	float _last_approach_dist{-1.f};

@@ -363,11 +363,19 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float psi = _local_pos.heading;
 	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
 
-	// Initialize continuous forward speed if needed
-	if (!_speed_initialized || _fwd_speed_cmd < 5.0f) {
+	// Continuously estimate target forward speed purely from visual closing rate + drone speed
+	// Target forward speed along line of flight = drone forward speed - closing rate
+	// (Eliminates 2 Hz ground telemetry coupling and discrete speed steps)
+	const float raw_target_fwd_speed = current_fwd_speed - _filt_visual_closing_speed;
+	if (!_speed_initialized || _target_speed_est < 5.0f) {
+		_target_speed_est = math::constrain(raw_target_fwd_speed, 18.0f, 45.0f);
 		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, 45.0f);
 		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
+	} else if (dt > 0.005f) {
+		constexpr float SPEED_EST_TAU = 0.40f;
+		const float alpha_spd = math::constrain(dt / (SPEED_EST_TAU + dt), 0.02f, 0.30f);
+		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 15.0f, 45.0f) - _target_speed_est);
 	}
 
 	// 2. Direct Range-Based Standoff Velocity Control (Pure Optical range_m)
@@ -402,40 +410,24 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	float delta_v = 0.0f;
 
 	if (fabsf(dist_err) > DIST_TOL) {
-		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.20f * dist_err, -4.0f, 4.0f);
+		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.15f * dist_err, -3.0f, 3.0f);
 	} else {
 		// Inside corridor: gently damp any residual closing velocity
-		if (fabsf(_filt_visual_closing_speed) > 0.15f) {
-			delta_v = -kd_opt * _filt_visual_closing_speed;
-		} else {
-			delta_v = 0.0f;
-		}
+		delta_v = -kd_opt * 0.5f * _filt_visual_closing_speed;
 	}
-
-	// Adaptive maneuver corner braking:
-	// If target drifts towards FOV edges beyond +/- 0.25 deadband ([0.25, 0.75]),
-	// gently brake forward speed proportionally to (size * lateral_drift) to tighten turn radius
-	const float lat_offset = fabsf(cx - 0.50f);
-	constexpr float LAT_BRAKE_DEADBAND = 0.25f; // +/- 0.25 deadband corridor ([0.25, 0.75])
-	float corner_brake = 0.0f;
-	if (lat_offset > LAT_BRAKE_DEADBAND) {
-		const float lat_drift = lat_offset - LAT_BRAKE_DEADBAND;
-		const float k_corner = _param_int_k_corner.get();
-		corner_brake = math::constrain(k_corner * w * lat_drift, 0.0f, 3.0f);
-	}
-	delta_v -= corner_brake;
 
 	// Clamp commanded velocity delta to prevent abrupt pitch swings
-	delta_v = math::constrain(delta_v, -5.0f, 5.0f);
+	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
 
-	// Desired forward speed is referenced to vehicle's OWN actual ground speed
-	// Multicopter has no stall speed: allow slowing all the way down to hover (0.0 m/s) if needed during sharp maneuvers!
-	const float desired_fwd_speed = math::constrain(current_fwd_speed + delta_v, 0.0f, 45.0f);
+	// Commanded forward speed referenced to smooth optical target speed estimate
+	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v, 15.0f, 45.0f);
 
-	// Slew-rate limit forward speed command matching MPC_ACC_HOR for smooth aerodynamic pitch transitions
+	// Slew-rate limit forward speed command in close pursuit
+	// Smooth rate limit (max 2.0 m/s^2) completely eliminates pitch bobbing / 1 Hz oscillations!
+	constexpr float MAX_CLOSE_ACCEL = 2.0f;
 	const float prev_speed_cmd = _fwd_speed_cmd;
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dv = max_acc_hor * dt;
+		const float max_dv = MAX_CLOSE_ACCEL * dt;
 		_fwd_speed_cmd = math::constrain(desired_fwd_speed, _fwd_speed_cmd - max_dv, _fwd_speed_cmd + max_dv);
 		_fwd_accel_cmd = (_fwd_speed_cmd - prev_speed_cmd) / dt;
 	} else {
@@ -602,6 +594,7 @@ void Intercept::Run()
 			_last_approach_time = 0;
 			_last_visual_dist = -1.f;
 			_filt_visual_closing_speed = 0.f;
+			_target_speed_est = 25.f;
 		}
 
 		// State transitions: APPROACH <-> CLOSE_PURSUIT
@@ -614,6 +607,7 @@ void Intercept::Run()
 				_filt_d_w_dt = 0.f;
 				_last_visual_dist = -1.f;
 				_filt_visual_closing_speed = 0.f;
+				_target_speed_est = _fwd_speed_cmd;
 
 				_last_w = _target_detection.bbox[2];
 				_last_cx = _target_detection.bbox[0];
@@ -642,6 +636,7 @@ void Intercept::Run()
 				_last_approach_time = 0;
 				_last_visual_dist = -1.f;
 				_filt_visual_closing_speed = 0.f;
+				_target_speed_est = 25.f;
 				PX4_WARN("Visual contact lost (>%.1fs), reverting to APPROACH", (double)_param_int_lost_timeout.get());
 			}
 		}
@@ -782,6 +777,7 @@ void Intercept::Run()
 			_last_approach_time = 0;
 			_last_visual_dist = -1.f;
 			_filt_visual_closing_speed = 0.f;
+			_target_speed_est = 25.f;
 		}
 	}
 }
