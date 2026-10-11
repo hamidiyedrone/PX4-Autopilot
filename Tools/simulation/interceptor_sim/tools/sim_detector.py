@@ -169,9 +169,11 @@ def main():
     ap.add_argument("--noise-bbox", type=float, default=None,
                     help="bbox jitter base stddev [px], default: from interceptor.yaml or 2.5")
     ap.add_argument("--noise-dropout", type=float, default=None,
-                    help="detection dropout probability [0..1], default: from interceptor.yaml or 0.03")
+                    help="detection dropout probability [0..1], default: from interceptor.yaml or 0.10")
     ap.add_argument("--noise-latency", type=int, default=None,
-                    help="detection latency [frames], default: from interceptor.yaml or 1")
+                    help="detection latency [frames], default: from interceptor.yaml or 2")
+    ap.add_argument("--noise-range", type=float, default=None,
+                    help="range measurement jitter stddev [m], default: from interceptor.yaml or 0.30")
     a = ap.parse_args()
 
     # camera intrinsics: from interceptor.yaml unless overridden
@@ -192,9 +194,10 @@ def main():
     # Noise parameters
     noise_cfg = cam.get("noise", {})
     noise_enabled = a.noise if a.noise is not None else noise_cfg.get("enabled", True)
-    noise_bbox_px = a.noise_bbox if a.noise_bbox is not None else noise_cfg.get("bbox_px", 2.5)
-    noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.03)
-    noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 1)
+    noise_bbox_px = a.noise_bbox if a.noise_bbox is not None else noise_cfg.get("bbox_px", 6.0)
+    noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.10)
+    noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 2)
+    noise_range_m = a.noise_range if a.noise_range is not None else noise_cfg.get("range_noise_m", 0.30)
 
     # Talon vertices for bounding box projection
     try:
@@ -291,7 +294,7 @@ def main():
     pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
     rate_desc = f"{a.rate:.0f} Hz" if a.rate > 0 else "frame-driven (unbounded)"
-    noise_desc = (f"noise [jitter {noise_bbox_px:.1f}px, drop {noise_dropout_rate*100:.0f}%, delay {noise_latency_frames}f]"
+    noise_desc = (f"noise [jitter {noise_bbox_px:.1f}px, range ±{noise_range_m:.2f}m, drop {noise_dropout_rate*100:.0f}%, delay {noise_latency_frames}f]"
                   if noise_enabled else "noise [off]")
     print(f"sim_detector: {a.interceptor} camera → {a.target}, "
           f"udp {a.port}, {rate_desc}, max range {a.max_range:.0f} m, "
@@ -587,19 +590,21 @@ def main():
         if noise_enabled:
             conf_val = 255.0 - (range_m / 50.0) * 35.0 + random.gauss(0.0, 4.0)
             confidence = int(np.clip(conf_val, 170, 255))
+            range_out = max(0.2, range_m + random.gauss(0.0, noise_range_m * (1.0 + range_m / 30.0)))
         else:
             confidence = 255
+            range_out = float(range_m)
         range_sigma = 0.1 if not noise_enabled else float(np.clip(0.1 + (range_m / 50.0) * 0.8, 0.1, 1.0))
 
         pkt = pack_packet(
             frame_id, 0, flags, confidence,
             los_out,
-            float(range_m), range_sigma,
+            float(range_out), range_sigma,
             q_out,
             bbox
         )
         msg_det = Double_V()
-        msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_m), 1.0])
+        msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_out), 1.0])
         dispatch_packet(pkt, msg_det)
 
         # periodic status
