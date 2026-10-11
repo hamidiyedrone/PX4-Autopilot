@@ -217,8 +217,9 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	// Initialize continuous speed from current forward speed if needed
 	const float psi = _local_pos.heading;
 	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
+	const float max_xy_vel = _param_mpc_xy_vel_max.get();
 	if (!_speed_initialized) {
-		_fwd_speed_cmd = math::constrain(current_fwd_speed, 20.0f, 45.0f);
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 20.0f, max_xy_vel);
 		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
 	}
@@ -235,7 +236,7 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 
 	// 2. Direct acceleration control based on closing distance and closing rate
 	if (dist_to_target > 100.0f) {
-		// Far away (>100m): full throttle pursuit (+5.0 m/s^2 towards 45 m/s top speed)
+		// Far away (>100m): full throttle pursuit (+5.0 m/s^2 towards top speed)
 		_fwd_accel_cmd = 5.0f;
 	} else {
 		// Inside 100m approaching visual range (50m):
@@ -260,7 +261,7 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	// Clamp forward speed:
 	// Minimum speed GUARANTEES closing speed never drops below min_closing (default 8 m/s)!
 	const float min_approach_speed = _target_pos_valid ? math::max(target_speed + min_closing, 15.0f) : 15.0f;
-	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 45.0f);
+	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, max_xy_vel);
 
 	// 3. Aim point placed 30m directly behind target along its flight line
 	const float dist_behind = 30.f;
@@ -334,9 +335,6 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const hrt_abstime now = hrt_absolute_time();
 
 	const float cx = _target_detection.bbox[0]; // [0.0, 1.0], center is 0.50
-	const float cy = _target_detection.bbox[1]; // [0.0, 1.0], center is 0.50
-	const float w  = _target_detection.bbox[2]; // Target bounding box width fraction
-
 
 	// Compute time step for optical derivative estimation
 	float dt = 0.033f; // default 30 Hz
@@ -362,20 +360,21 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Current forward ground speed along heading
 	const float psi = _local_pos.heading;
 	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
+	const float max_xy_vel = _param_mpc_xy_vel_max.get();
 
 	// Continuously estimate target forward speed purely from visual closing rate + drone speed
 	// Target forward speed along line of flight = drone forward speed - closing rate
 	// (Eliminates 2 Hz ground telemetry coupling and discrete speed steps)
 	const float raw_target_fwd_speed = current_fwd_speed - _filt_visual_closing_speed;
 	if (!_speed_initialized || _target_speed_est < 5.0f) {
-		_target_speed_est = math::constrain(raw_target_fwd_speed, 18.0f, 45.0f);
-		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, 45.0f);
+		_target_speed_est = math::constrain(raw_target_fwd_speed, 18.0f, max_xy_vel);
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, max_xy_vel);
 		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
 	} else if (dt > 0.005f) {
 		constexpr float SPEED_EST_TAU = 0.40f;
 		const float alpha_spd = math::constrain(dt / (SPEED_EST_TAU + dt), 0.02f, 0.30f);
-		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 15.0f, 45.0f) - _target_speed_est);
+		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 15.0f, max_xy_vel) - _target_speed_est);
 	}
 
 	// 2. Direct Range-Based Standoff Velocity Control (Pure Optical range_m)
@@ -420,7 +419,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
 
 	// Commanded forward speed referenced to smooth optical target speed estimate
-	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v, 15.0f, 45.0f);
+	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v, 15.0f, max_xy_vel);
 
 	// Slew-rate limit forward speed command in close pursuit
 	// Smooth rate limit (max 2.0 m/s^2) completely eliminates pitch bobbing / 1 Hz oscillations!
@@ -434,8 +433,6 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		_fwd_speed_cmd = desired_fwd_speed;
 		_fwd_accel_cmd = 0.0f;
 	}
-
-	_last_w = w;
 
 	// 3. 3D Velocity Command
 	// Longitudinal horizontal velocity along line of sight in XY plane
@@ -516,10 +513,6 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	} else {
 		yaw_cmd = desired_yaw;
 	}
-
-	_last_cx = cx;
-	_last_cy = cy;
-	_last_w  = w;
 }
 
 void Intercept::Run()
@@ -586,9 +579,8 @@ void Intercept::Run()
 			_last_visual_time = 0;
 			_speed_initialized = false;
 			_los_ned_valid = false;
-			_fwd_speed_cmd = 45.f;
+			_fwd_speed_cmd = _param_mpc_xy_vel_max.get();
 			_fwd_accel_cmd = 0.f;
-			_speed_initialized = false;
 			_last_approach_dist = -1.f;
 			_filt_closing_speed = 0.f;
 			_last_approach_time = 0;
@@ -604,14 +596,9 @@ void Intercept::Run()
 				_guidance_state = GuidanceState::CLOSE_PURSUIT;
 				_last_visual_time = 0;
 				_los_ned_valid = false;
-				_filt_d_w_dt = 0.f;
 				_last_visual_dist = -1.f;
 				_filt_visual_closing_speed = 0.f;
 				_target_speed_est = _fwd_speed_cmd;
-
-				_last_w = _target_detection.bbox[2];
-				_last_cx = _target_detection.bbox[0];
-				_last_cy = _target_detection.bbox[1];
 
 				if (!_last_cmd_valid) {
 					_last_yaw_cmd = _local_pos.heading;
@@ -621,8 +608,8 @@ void Intercept::Run()
 					_last_cmd_valid = true;
 				}
 
-				PX4_INFO("Visual contact acquired! Handover to CLOSE_PURSUIT (IBVS), speed=%.1f m/s, bbox_w=%.3f",
-					 (double)_fwd_speed_cmd, (double)_last_w);
+				PX4_INFO("Visual contact acquired! Handover to CLOSE_PURSUIT, speed=%.1f m/s, range=%.1f m",
+					 (double)_fwd_speed_cmd, (double)_target_detection.range_m);
 			}
 
 		} else if (_guidance_state == GuidanceState::CLOSE_PURSUIT) {
@@ -670,7 +657,7 @@ void Intercept::Run()
 				}
 
 				// Fly towards target position with continuous speed
-				const float pursuit_speed = math::constrain(_fwd_speed_cmd, 12.0f, 40.0f);
+				const float pursuit_speed = math::constrain(_fwd_speed_cmd, 12.0f, _param_mpc_xy_vel_max.get());
 				if (dist_xy > 0.5f) {
 					vel_cmd(0) = (dx / dist_xy) * pursuit_speed;
 					vel_cmd(1) = (dy / dist_xy) * pursuit_speed;
@@ -770,7 +757,7 @@ void Intercept::Run()
 			_last_visual_time = 0;
 			_speed_initialized = false;
 			_los_ned_valid = false;
-			_fwd_speed_cmd = 45.f;
+			_fwd_speed_cmd = _param_mpc_xy_vel_max.get();
 			_fwd_accel_cmd = 0.f;
 			_last_approach_dist = -1.f;
 			_filt_closing_speed = 0.f;

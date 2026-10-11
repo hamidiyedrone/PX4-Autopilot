@@ -149,11 +149,7 @@ private:
 	float _fwd_accel_cmd{0.f};
 	bool _speed_initialized{false};
 
-	// Optical looming state (IBVS PD)
-	float _last_w{0.50f};
-	float _last_cx{0.5f};
-	float _last_cy{0.5f};
-	float _filt_d_w_dt{0.f};
+	// Visual guidance timing
 	hrt_abstime _last_visual_time{0};
 
 	// Close pursuit visual range closing rate state
@@ -172,17 +168,17 @@ private:
 
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
-		(ParamFloat<px4::params::INT_TGT_SIZE>) _param_int_tgt_size,
 		(ParamFloat<px4::params::INT_STANDOFF>) _param_int_standoff,
 		(ParamFloat<px4::params::INT_MIN_CLOSING>) _param_int_min_closing,
 		(ParamFloat<px4::params::INT_KP_OPT>) _param_int_kp_opt,
 		(ParamFloat<px4::params::INT_KD_OPT>) _param_int_kd_opt,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
+		(ParamFloat<px4::params::MPC_ACC_HOR_MAX>) _param_mpc_acc_hor_max,
+		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max,
 		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
 		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
 		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
 		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate,
-		(ParamFloat<px4::params::INT_K_CORNER>) _param_int_k_corner,
 		(ParamFloat<px4::params::INT_LOST_TIMEOUT>) _param_int_lost_timeout
 	)
 };

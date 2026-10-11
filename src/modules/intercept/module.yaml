@@ -10,16 +10,6 @@ parameters:
             type: boolean
             default: 1
 
-        INT_TGT_SIZE:
-            description:
-                short: Desired target bounding box width
-                long: Normalized screen width fraction of target for terminal standoff (0.10 to 0.70).
-            type: float
-            default: 0.50
-            min: 0.10
-            max: 0.70
-            decimal: 2
-
         INT_STANDOFF:
             description:
                 short: Desired terminal standoff distance
@@ -99,16 +89,6 @@ parameters:
             default: 42.0
             min: 5.0
             max: 60.0
-            decimal: 1
-
-        INT_K_CORNER:
-            description:
-                short: Adaptive corner braking gain
-                long: Proportional braking gain on (target_size * lateral_drift) reducing forward speed during turns.
-            type: float
-            default: 10.0
-            min: 0.0
-            max: 30.0
             decimal: 1
 
         INT_LOST_TIMEOUT:
