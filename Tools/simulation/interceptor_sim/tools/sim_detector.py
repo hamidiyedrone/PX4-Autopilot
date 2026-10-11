@@ -294,7 +294,7 @@ def main():
     pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
     rate_desc = f"{a.rate:.0f} Hz" if a.rate > 0 else "frame-driven (unbounded)"
-    noise_desc = (f"noise [jitter {noise_bbox_px:.1f}px, range ±{noise_range_m:.2f}m, drop {noise_dropout_rate*100:.0f}%, delay {noise_latency_frames}f]"
+    noise_desc = (f"noise [jitter {noise_bbox_px:.1f}px, range ±{noise_range_m:.2f}m, drop {noise_dropout_rate*100:.0f}%, delay {noise_latency_frames}f (distance-proportional)]"
                   if noise_enabled else "noise [off]")
     print(f"sim_detector: {a.interceptor} camera → {a.target}, "
           f"udp {a.port}, {rate_desc}, max range {a.max_range:.0f} m, "
@@ -531,8 +531,11 @@ def main():
 
                 if bw_clip > 0.5 and bh_clip > 0.5 and vis_ratio >= (2.0 / 3.0):
                     visible = True
-                    # Random dropout (false negative frame)
-                    if noise_enabled and noise_dropout_rate > 0.0 and random.random() < noise_dropout_rate:
+                    dist_ratio = float(np.clip(range_m / a.max_range, 0.0, 1.0))
+
+                    # Random dropout strictly proportional to distance (virtually 0 close-up)
+                    cur_dropout = noise_dropout_rate * dist_ratio
+                    if noise_enabled and cur_dropout > 0.0 and random.random() < cur_dropout:
                         visible = False
 
                     if visible:
@@ -542,8 +545,9 @@ def main():
                         h_raw = bh_clip / height
 
                         if noise_enabled and noise_bbox_px > 0.0:
-                            # Distance-adaptive jitter: ~1.5px close up, ~3.5px at max range (50m)
-                            dist_scale = float(np.clip(1.2 + (range_m / 50.0) * 2.3, 1.2, 3.8)) * (noise_bbox_px / 2.5)
+                            # Bounding box jitter strictly proportional to distance:
+                            # Scales from ~0.15px close-up (2.5m) to full noise_bbox_px at max range (50m)
+                            dist_scale = float(np.clip(dist_ratio * noise_bbox_px, 0.15, noise_bbox_px * 1.5))
                             drift = np.random.normal(0.0, 1.0, 4)
                             bbox_noise_state = 0.65 * bbox_noise_state + 0.35 * drift
 
@@ -588,13 +592,19 @@ def main():
             flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
 
         if noise_enabled:
-            conf_val = 255.0 - (range_m / 50.0) * 35.0 + random.gauss(0.0, 4.0)
+            dist_ratio = float(np.clip(range_m / a.max_range, 0.0, 1.0))
+            conf_val = 255.0 - dist_ratio * 35.0 + random.gauss(0.0, 4.0 * dist_ratio)
             confidence = int(np.clip(conf_val, 170, 255))
-            range_out = max(0.2, range_m + random.gauss(0.0, noise_range_m * (1.0 + range_m / 30.0)))
+            # Range estimation jitter strictly proportional to distance:
+            # At max range (50m): ~noise_range_m (0.15m)
+            # At standoff (2.5m): ~0.0075m (7.5mm)
+            sigma_range = float(np.clip(noise_range_m * dist_ratio, 0.005, noise_range_m * 1.5))
+            range_out = max(0.2, range_m + random.gauss(0.0, sigma_range))
+            range_sigma = float(np.clip(0.01 + dist_ratio * 0.99, 0.01, 1.0))
         else:
             confidence = 255
             range_out = float(range_m)
-        range_sigma = 0.1 if not noise_enabled else float(np.clip(0.1 + (range_m / 50.0) * 0.8, 0.1, 1.0))
+            range_sigma = 0.01
 
         pkt = pack_packet(
             frame_id, 0, flags, confidence,
