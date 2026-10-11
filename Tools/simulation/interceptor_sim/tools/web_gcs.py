@@ -46,6 +46,10 @@ telemetry_data = {
         "att": [0.0, 0.0, 0.0], # Roll, Pitch, Yaw in degrees
         "speed": 0.0,
         "alt": 0.0,
+        "barrel_pitch_deg": 0.0,
+        "gimbal_yaw_deg": 0.0,
+        "gimbal_pitch_deg": 0.0,
+        "gimbal_roll_deg": 0.0,
         "last_update": 0.0
     },
     "talon": {
@@ -81,16 +85,91 @@ tgt_trail = deque(maxlen=1000)
 
 # ---------------------------------------------------- Gazebo Transport Worker ---
 
+gz_launcher_pub = None
+gz_gmb_yaw_pub = None
+gz_gmb_pitch_pub = None
+gz_gmb_roll_pub = None
+
+def send_barrel_pitch_cmd(pitch_deg: float, interceptor_name="interceptor_0"):
+    global gz_launcher_pub, telemetry_data
+    pitch_deg = max(-10.0, min(90.0, float(pitch_deg)))
+    pitch_rad = math.radians(pitch_deg)
+    with state_lock:
+        telemetry_data["interceptor"]["barrel_pitch_deg"] = round(pitch_deg, 1)
+
+    published = False
+    if gz_launcher_pub is not None:
+        try:
+            from gz.msgs10.double_pb2 import Double
+            msg = Double()
+            msg.data = pitch_rad
+            gz_launcher_pub.publish(msg)
+            published = True
+        except Exception:
+            pass
+
+    if not published:
+        try:
+            subprocess.Popen([
+                "gz", "topic", "-t", f"/model/{interceptor_name}/command/net_launcher_pitch",
+                "-m", "gz.msgs.Double", "-p", f"data: {pitch_rad:.4f}"
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def send_gimbal_cmd(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0, interceptor_name="interceptor_0"):
+    global gz_gmb_yaw_pub, gz_gmb_pitch_pub, gz_gmb_roll_pub, telemetry_data
+    yaw_deg = max(-45.0, min(45.0, float(yaw_deg)))
+    pitch_deg = max(-45.0, min(60.0, float(pitch_deg)))
+    roll_deg = max(-35.0, min(35.0, float(roll_deg)))
+
+    yaw_rad = math.radians(yaw_deg)
+    pitch_rad = math.radians(pitch_deg)
+    roll_rad = math.radians(roll_deg)
+
+    with state_lock:
+        telemetry_data["interceptor"]["gimbal_yaw_deg"] = round(yaw_deg, 1)
+        telemetry_data["interceptor"]["gimbal_pitch_deg"] = round(pitch_deg, 1)
+        telemetry_data["interceptor"]["gimbal_roll_deg"] = round(roll_deg, 1)
+
+    if gz_gmb_yaw_pub is not None:
+        try:
+            from gz.msgs10.double_pb2 import Double
+            my = Double(); my.data = yaw_rad; gz_gmb_yaw_pub.publish(my)
+            mp = Double(); mp.data = pitch_rad; gz_gmb_pitch_pub.publish(mp)
+            if gz_gmb_roll_pub is not None:
+                mr = Double(); mr.data = roll_rad; gz_gmb_roll_pub.publish(mr)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.Popen(["gz", "topic", "-t", f"/model/{interceptor_name}/command/seeker_yaw", "-m", "gz.msgs.Double", "-p", f"data: {yaw_rad:.4f}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["gz", "topic", "-t", f"/model/{interceptor_name}/command/seeker_pitch", "-m", "gz.msgs.Double", "-p", f"data: {pitch_rad:.4f}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["gz", "topic", "-t", f"/model/{interceptor_name}/command/seeker_roll", "-m", "gz.msgs.Double", "-p", f"data: {roll_rad:.4f}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
 def gz_transport_worker_thread(world="ankara", interceptor_name="interceptor_0", target_name="talon1718_1"):
-    global telemetry_data
+    global telemetry_data, gz_launcher_pub, gz_gmb_yaw_pub, gz_gmb_pitch_pub, gz_gmb_roll_pub
     try:
         from gz.transport13 import Node
         from gz.msgs10.pose_v_pb2 import Pose_V
+        from gz.msgs10.double_pb2 import Double
     except Exception as e:
         print("Gazebo transport import notice in Web GCS:", e, flush=True)
         return
 
     node = Node()
+    try:
+        gz_launcher_pub = node.advertise(f"/model/{interceptor_name}/command/net_launcher_pitch", Double)
+        gz_gmb_yaw_pub = node.advertise(f"/model/{interceptor_name}/command/seeker_yaw", Double)
+        gz_gmb_pitch_pub = node.advertise(f"/model/{interceptor_name}/command/seeker_pitch", Double)
+        gz_gmb_roll_pub = node.advertise(f"/model/{interceptor_name}/command/seeker_roll", Double)
+    except Exception as e:
+        print("Actuator pub advertise notice:", e, flush=True)
+
     prev_pos = None
     prev_t = 0.0
 
@@ -385,6 +464,30 @@ async def interceptor_cmd(payload: dict):
     try:
         subprocess.Popen(cmd)
         return JSONResponse({"status": "ok", "action": action})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/interceptor/barrel")
+async def interceptor_barrel(payload: dict):
+    """Set net launcher barrel pitch angle (-10 to 90 deg)."""
+    try:
+        deg = float(payload.get("pitch_deg", 0.0))
+        send_barrel_pitch_cmd(deg)
+        return JSONResponse({"status": "ok", "pitch_deg": deg})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/interceptor/gimbal")
+async def interceptor_gimbal(payload: dict):
+    """Set Storm32 3-axis gimbal angles (yaw -45..45, pitch -45..60, roll -35..35)."""
+    try:
+        yaw = float(payload.get("yaw_deg", 0.0))
+        pitch = float(payload.get("pitch_deg", 0.0))
+        roll = float(payload.get("roll_deg", 0.0))
+        send_gimbal_cmd(yaw, pitch, roll)
+        return JSONResponse({"status": "ok", "yaw_deg": yaw, "pitch_deg": pitch, "roll_deg": roll})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
@@ -710,6 +813,59 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Net Launcher Control Deck -->
+      <div class="card-glass rounded-lg p-3.5 border-l-4 border-amber-500">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-base font-bold text-amber-400 tracking-wide uppercase"><i class="fa-solid fa-bullhorn text-sm mr-2"></i>MITLA 2.0 Ağ Fırlatıcı Namlusu</h2>
+          <span id="txt-barrel-deg" class="mono text-xs bg-amber-950 text-amber-300 font-bold px-2 py-0.5 rounded border border-amber-700">0.0°</span>
+        </div>
+        <div class="text-[11px] text-slate-400 mb-2">Elevasyon Açısı (-10° Güvenli İç Eğim — 0° Düz İleri — 90° Yatay):</div>
+        <div class="flex items-center space-x-2 mb-2">
+          <input type="range" id="barrel-slider" min="-10" max="90" step="1" value="0" oninput="onBarrelSliderChange(this.value)" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
+        </div>
+        <div class="grid grid-cols-5 gap-1 text-[10px] font-bold">
+          <button onclick="setBarrelDeg(-10)" class="bg-slate-800 hover:bg-amber-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">-10°</button>
+          <button onclick="setBarrelDeg(0)" class="bg-slate-800 hover:bg-amber-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">0°</button>
+          <button onclick="setBarrelDeg(30)" class="bg-slate-800 hover:bg-amber-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">30°</button>
+          <button onclick="setBarrelDeg(60)" class="bg-slate-800 hover:bg-amber-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">60°</button>
+          <button onclick="setBarrelDeg(90)" class="bg-slate-800 hover:bg-amber-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">90°</button>
+        </div>
+      </div>
+
+      <!-- Storm32 3-Axis Gimbal Control Deck -->
+      <div class="card-glass rounded-lg p-3.5 border-l-4 border-indigo-500">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-base font-bold text-indigo-400 tracking-wide uppercase"><i class="fa-solid fa-video text-sm mr-2"></i>Storm32 Gimbal (Arayıcı)</h2>
+          <div class="space-x-1 mono text-[10px]">
+            <span id="txt-gmb-y" class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-800">Y: 0.0°</span>
+            <span id="txt-gmb-p" class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-800">P: 0.0°</span>
+            <span id="txt-gmb-r" class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-800">R: 0.0°</span>
+          </div>
+        </div>
+
+        <div class="text-[10px] text-slate-400 flex justify-between mt-1"><span>Yaw (Pan: -45° Sol / +45° Sağ):</span><span id="lbl-val-gmb-y" class="mono text-indigo-300">0.0°</span></div>
+        <div class="flex items-center space-x-2 mb-1.5">
+          <input type="range" id="gmb-yaw-slider" min="-45" max="45" step="1" value="0" oninput="onGimbalSliderChange()" class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+        </div>
+
+        <div class="text-[10px] text-slate-400 flex justify-between"><span>Pitch (Tilt: -45° İleri / +60° Aşağı):</span><span id="lbl-val-gmb-p" class="mono text-indigo-300">0.0°</span></div>
+        <div class="flex items-center space-x-2 mb-1.5">
+          <input type="range" id="gmb-pitch-slider" min="-45" max="60" step="1" value="0" oninput="onGimbalSliderChange()" class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+        </div>
+
+        <div class="text-[10px] text-slate-400 flex justify-between"><span>Roll (Denge: -35° / +35°):</span><span id="lbl-val-gmb-r" class="mono text-indigo-300">0.0°</span></div>
+        <div class="flex items-center space-x-2 mb-2">
+          <input type="range" id="gmb-roll-slider" min="-35" max="35" step="1" value="0" oninput="onGimbalSliderChange()" class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+        </div>
+
+        <div class="grid grid-cols-4 gap-1 text-[9px] font-bold">
+          <button onclick="setGimbalAngles(0, 0, 0)" class="bg-slate-800 hover:bg-indigo-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">0° SIFIRLA</button>
+          <button onclick="setGimbalAngles(0, 30, 0)" class="bg-slate-800 hover:bg-indigo-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">+30° AŞAĞI</button>
+          <button onclick="setGimbalAngles(-25, 0, 0)" class="bg-slate-800 hover:bg-indigo-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">-25° SOL</button>
+          <button onclick="setGimbalAngles(25, 0, 0)" class="bg-slate-800 hover:bg-indigo-800 text-slate-200 p-1.5 rounded transition text-center border border-slate-700">+25° SAĞ</button>
+        </div>
+      </div>
+
       <!-- Separation & Fire Control Telemetry Card -->
       <div class="card-glass rounded-lg p-3.5 border border-cyan-500/30">
         <div class="flex items-center justify-between mb-2">
@@ -863,6 +1019,21 @@ HTML_CONTENT = """<!DOCTYPE html>
       if (inter.connected) {
         document.getElementById("txt-v-int").innerText = `${inter.speed.toFixed(1)} m/s (${(inter.speed * 3.6).toFixed(0)} km/h)`;
         document.getElementById("txt-pitch").innerText = `${inter.att[1].toFixed(1)}° (Roll: ${inter.att[0].toFixed(1)}°)`;
+        if (inter.barrel_pitch_deg !== undefined && !isInteractingBarrel) {
+          const barrelLbl = document.getElementById("txt-barrel-deg");
+          const barrelSlider = document.getElementById("barrel-slider");
+          if (barrelLbl) barrelLbl.innerText = `${inter.barrel_pitch_deg.toFixed(1)}°`;
+          if (barrelSlider && document.activeElement !== barrelSlider) barrelSlider.value = inter.barrel_pitch_deg;
+        }
+        if (inter.gimbal_yaw_deg !== undefined && !isInteractingGimbal) {
+          const sy = document.getElementById("gmb-yaw-slider");
+          const sp = document.getElementById("gmb-pitch-slider");
+          const sr = document.getElementById("gmb-roll-slider");
+          if (sy && document.activeElement !== sy) sy.value = inter.gimbal_yaw_deg;
+          if (sp && document.activeElement !== sp) sp.value = inter.gimbal_pitch_deg;
+          if (sr && document.activeElement !== sr) sr.value = inter.gimbal_roll_deg || 0;
+          updateGimbalLabels(inter.gimbal_yaw_deg, inter.gimbal_pitch_deg, inter.gimbal_roll_deg || 0);
+        }
       } else {
         document.getElementById("txt-v-int").innerText = "--- m/s";
         document.getElementById("txt-pitch").innerText = "---°";
@@ -1101,6 +1272,92 @@ HTML_CONTENT = """<!DOCTYPE html>
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({action: action})
+      });
+    }
+
+    let isInteractingBarrel = false;
+    let barrelTimer = null;
+
+    function setBarrelDeg(deg) {
+      const slider = document.getElementById("barrel-slider");
+      if (slider) slider.value = deg;
+      const lbl = document.getElementById("txt-barrel-deg");
+      if (lbl) lbl.innerText = `${parseFloat(deg).toFixed(1)}°`;
+
+      fetch("/api/interceptor/barrel", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({pitch_deg: parseFloat(deg)})
+      });
+    }
+
+    function onBarrelSliderChange(val) {
+      isInteractingBarrel = true;
+      const lbl = document.getElementById("txt-barrel-deg");
+      if (lbl) lbl.innerText = `${parseFloat(val).toFixed(1)}°`;
+
+      if (barrelTimer) clearTimeout(barrelTimer);
+      barrelTimer = setTimeout(() => {
+        isInteractingBarrel = false;
+      }, 1000);
+
+      fetch("/api/interceptor/barrel", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({pitch_deg: parseFloat(val)})
+      });
+    }
+
+    let isInteractingGimbal = false;
+    let gimbalTimer = null;
+
+    function updateGimbalLabels(y, p, r) {
+      const ty = document.getElementById("txt-gmb-y");
+      const tp = document.getElementById("txt-gmb-p");
+      const tr = document.getElementById("txt-gmb-r");
+      const ly = document.getElementById("lbl-val-gmb-y");
+      const lp = document.getElementById("lbl-val-gmb-p");
+      const lr = document.getElementById("lbl-val-gmb-r");
+      if (ty) ty.innerText = `Y: ${parseFloat(y).toFixed(1)}°`;
+      if (tp) tp.innerText = `P: ${parseFloat(p).toFixed(1)}°`;
+      if (tr) tr.innerText = `R: ${parseFloat(r).toFixed(1)}°`;
+      if (ly) ly.innerText = `${parseFloat(y).toFixed(1)}°`;
+      if (lp) lp.innerText = `${parseFloat(p).toFixed(1)}°`;
+      if (lr) lr.innerText = `${parseFloat(r).toFixed(1)}°`;
+    }
+
+    function setGimbalAngles(y, p, r) {
+      const sy = document.getElementById("gmb-yaw-slider");
+      const sp = document.getElementById("gmb-pitch-slider");
+      const sr = document.getElementById("gmb-roll-slider");
+      if (sy) sy.value = y;
+      if (sp) sp.value = p;
+      if (sr) sr.value = r;
+      updateGimbalLabels(y, p, r);
+
+      fetch("/api/interceptor/gimbal", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({yaw_deg: parseFloat(y), pitch_deg: parseFloat(p), roll_deg: parseFloat(r)})
+      });
+    }
+
+    function onGimbalSliderChange() {
+      isInteractingGimbal = true;
+      const y = document.getElementById("gmb-yaw-slider")?.value || 0;
+      const p = document.getElementById("gmb-pitch-slider")?.value || 0;
+      const r = document.getElementById("gmb-roll-slider")?.value || 0;
+      updateGimbalLabels(y, p, r);
+
+      if (gimbalTimer) clearTimeout(gimbalTimer);
+      gimbalTimer = setTimeout(() => {
+        isInteractingGimbal = false;
+      }, 1000);
+
+      fetch("/api/interceptor/gimbal", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({yaw_deg: parseFloat(y), pitch_deg: parseFloat(p), roll_deg: parseFloat(r)})
       });
     }
 

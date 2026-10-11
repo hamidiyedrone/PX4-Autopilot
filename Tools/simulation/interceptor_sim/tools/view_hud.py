@@ -443,17 +443,20 @@ def draw_flight_data(img, tel, sim_t, w, h, gmb_data=None, fps=None):
     fps_str = f"FPS {fps:5.1f}" if fps is not None and fps > 0.1 else "FPS   ---"
     hud_text(img, fps_str, (24 * s, 54 * s), 0.5 * s)
 
-    # gimbal angles relative to forward boresight (top right, 2 lines like bottom left)
-    gmb_yaw = gmb_pitch = None
+    # gimbal angles relative to forward boresight (top right, 2-3 lines)
+    gmb_yaw = gmb_pitch = barrel_pitch = None
     if gmb_data is not None:
         gmb_yaw = gmb_data.get("yaw")
         gmb_pitch = gmb_data.get("pitch")
+        barrel_pitch = gmb_data.get("barrel")
 
     x_tr = w - 24 * s
     y_tr = 30 * s
     dy_tr = 24 * s
     hud_text(img, "GMB YAW   " + fmt(gmb_yaw, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
     hud_text(img, "GMB PITCH " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr + dy_tr), 0.55 * s, "right")
+    if barrel_pitch is not None:
+        hud_text(img, "BARREL    " + fmt(barrel_pitch, " 5.1f") + "\u00b0", (x_tr, y_tr + 2 * dy_tr), 0.55 * s, "right")
 
 
 def draw_hud(img, tracking_data, width, height):
@@ -553,9 +556,10 @@ def main():
     for name, comp in components.items():
         total_mass += comp["mass"]
         cg_num += comp["mass"] * comp["z"]
-    cg_num += cfg["fuselage"]["mass"] * fus_len / 2
     cg = cg_num / total_mass
-    cam_offset_body = np.array([0.0, 0.0, fus_len - cg])
+    cam_offset_x = cfg.get("camera", {}).get("offset_x", 0.038)
+    ped_h = cfg.get("gimbal", {}).get("pedestal_height", 0.030)
+    cam_offset_body = np.array([cam_offset_x, 0.0, (fus_len - cg) + ped_h + 0.094])
 
     # Rotation: Body FLU to Gazebo camera frame
     # Camera sensor looks along body +z (thrust/nose direction)
@@ -572,7 +576,7 @@ def main():
 
     node = Node()
     state = {"poses": {}, "t": 0.0, "last_frame": None, "new_frame": False,
-             "gmb_yaw": 0.0, "gmb_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
+             "gmb_yaw": 0.0, "gmb_pitch": 0.0, "barrel_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
              "fps": 0.0, "last_frame_time": 0.0}
 
     def on_clock(msg):
@@ -588,6 +592,9 @@ def main():
 
     def on_gmb_pitch(msg):
         state["gmb_pitch"] = msg.data
+
+    def on_barrel_pitch(msg):
+        state["barrel_pitch"] = msg.data
 
     def on_detection(msg):
         if len(msg.data) >= 6:
@@ -623,6 +630,7 @@ def main():
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
     node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_yaw", on_gmb_yaw)
     node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/command/net_launcher_pitch", on_barrel_pitch)
     node.subscribe(Double_V, f"/model/{a.interceptor}/detection", on_detection)
 
     # Discover camera topic (on gimbal_pitch_link or base_link)
@@ -688,6 +696,7 @@ def main():
             gmb_data = {
                 "yaw": yaw_deg,
                 "pitch": pitch_deg,
+                "barrel": math.degrees(float(state.get("barrel_pitch", 0.0))),
             }
 
             cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)

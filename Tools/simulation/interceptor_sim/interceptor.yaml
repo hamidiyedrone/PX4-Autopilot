@@ -16,24 +16,24 @@ name: interceptor
 
 fuselage:
   diameter: 0.14        # 14 cm cylinder diameter
-  length: 1.00          # 100 cm total length (tail end to nose tip)
-  nose_length: 0.10     # rounded ogive nose cap
-  mass: 1.100           # composite cylindrical shell and internal structure
+  length: 1.00          # 100 cm total length (tail end to nose bulkhead)
+  nose_length: 0.00     # flat nose bulkhead deck (kubbemsi yapı kaldırıldı)
+  mass: 0.780           # lightweight carbon-composite cylindrical shell and bulkhead
 
 components:             # inside the fuselage, z = centre height above the tail end
-  battery:      {mass: 1.450, size: [0.08, 0.07, 0.22], z: 0.32}   # 6S/8S LiPo pack placed low for CG stability
-  avionics:     {mass: 0.520, size: [0.09, 0.09, 0.08], z: 0.55}   # FC, ESC 4-in-1, companion computer, seeker
-  payload:      {mass: 0.400, size: [0.10, 0.10, 0.12], z: 0.72}   # warhead / net launcher
+  battery:      {mass: 1.150, size: [0.08, 0.07, 0.20], z: 0.32}   # 6S/8S LiPo pack placed low for CG stability
+  avionics:     {mass: 0.386, size: [0.09, 0.09, 0.08], z: 0.52}   # FC, ESC 4-in-1, companion computer, seeker
+  payload:      {mass: 0.240, size: [0.10, 0.10, 0.12], z: 0.68}   # net launcher electronic discharge module
 
 motors:
   layout: "x"           # quad X layout (motors at +/- 45 deg)
   count: 4
-  mass: 0.110           # each BrotherHobby high-performance motor (~110 g)
-  arm_mass: 0.450       # all 4 wing arms + nacelles + landing legs together
+  mass: 0.085           # each high-performance motor (~85 g)
+  arm_mass: 0.320       # all 4 wing arms + nacelles + landing legs together (320 g)
   arm_radius: 0.25      # 50 cm span between opposite motors (fuselage axis to motor axis = 0.25 m)
   z_from_cg: 0.04       # motor plane relative to the CG (aligned with top edge of wing)
   prop_diameter_inch: 10 # 10 inch propeller
-  max_thrust_n: 42.0    # ~4.3 kgf per motor (4 * 42 = 168 N total thrust)
+  max_thrust_n: 41.678  # 4.25 kgf per motor (4 * 41.678 N = 166.71 N = 17.0 kgf total max thrust)
   motor_constant: 8.54858e-06   # motor model, thrust = k * omega^2
   moment_constant: 0.016
 
@@ -47,7 +47,7 @@ wings:                  # 4 aerodynamic wing-shaped arms (motor arms ARE the win
   leg_clearance: 0.05   # rods extend 5 cm past the tail end for stable landing
 
 tail_fins:              # 4 cruciform tail fins at the rear
-  mass: 0.120           # all 4 fins together
+  mass: 0.100           # all 4 fins together
   count: 4
   span_out: 0.09        # from fuselage surface outwards
   chord: 0.16           # along fuselage axis
@@ -66,12 +66,33 @@ camera:                 # nose seeker camera, streamed on udp 5600 by plugins/ca
   hfov_deg: 60
   rate: 60
   detect_port: 15600    # udp port of target_vision driver
+  offset_x: 0.038       # mounted on Storm32 3-axis gimbal (+X = 3.8 cm, near circle rim)
 
-gimbal:                 # 2-axis nose seeker gimbal (yaw +/-45 deg, pitch +/-45 deg)
+gimbal:                 # Storm32 3-axis lightweight brushless gimbal (yaw +/-45, roll +/-35, pitch -45..+60 deg)
   enabled: true
+  type: "storm32_3axis"
   yaw_limit_deg: 45     # azimuth/pan rotation around fuselage z axis (+/-45 deg)
-  pitch_limit_deg: 45   # elevation/tilt rotation around transverse y axis (+/-45 deg)
-  mass: 0.160           # total gimbal mass (yaw + pitch assemblies, kg)
-  p_gain: 6.0
-  i_gain: 0.8
-  d_gain: 0.08
+  roll_limit_deg: 35    # roll stabilization rotation (+/-35 deg)
+  pitch_limit_deg: 60   # elevation/tilt rotation around transverse y axis (-45..+60 deg)
+  mass: 0.304           # Storm32 gimbal mass (304 g)
+  size: [0.08, 0.08, 0.10] # 80x80x100 mm dimensions
+  offset_x: 0.038       # upper nose deck mount near outer rim (+X = 3.8 cm)
+  pedestal_height: 0.030 # elevated riser mount lifting gimbal and camera (+3 cm)
+  p_gain: 8.0
+  i_gain: 1.0
+  d_gain: 0.10
+
+net_launcher:           # MITLA 2.0 (Süpürge 2.0) Anti-FPV Net Launcher mechanism
+  enabled: true
+  model: "mitla_2.0"
+  barrel_diameter: 0.04 # 40 mm outer diameter (4 cm)
+  barrel_length: 0.12   # 120 mm length (12 cm - shortened compact tactical canister)
+  bore_diameter: 0.034  # 34 mm inner bore diameter
+  pitch_min_deg: -10.0  # -10 deg max tilt toward camera
+  pitch_max_deg: 90.0   # 90 deg max tilt outward
+  mass: 0.380           # MITLA 2.0 compact net canister & pivot assembly mass (380 g)
+  offset_x: -0.046      # lower nose deck mount near outer rim (-X = -4.6 cm)
+  p_gain: 12.0
+  i_gain: 1.2
+  d_gain: 0.25
+

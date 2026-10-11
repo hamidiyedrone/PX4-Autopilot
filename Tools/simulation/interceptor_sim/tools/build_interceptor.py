@@ -101,12 +101,19 @@ def main():
 	z_fin_center = fins["z_from_tail"] + fins["chord"] / 2
 	gimbal = c.get("gimbal", {})
 	gimbal_enabled = gimbal.get("enabled", False)
-	m_gimbal = gimbal.get("mass", 0.120) if gimbal_enabled else 0.0
-	z_gimbal = L - 0.015
+	m_gimbal = gimbal.get("mass", 0.304) if gimbal_enabled else 0.0
+	z_gimbal = L + 0.075
+
+	launcher = c.get("net_launcher", {})
+	launcher_enabled = launcher.get("enabled", False)
+	m_launcher = launcher.get("mass", 0.380) if launcher_enabled else 0.0
+	z_launcher = L + 0.045
 
 	fixed = [(fus["mass"], L / 2)] + [(p["mass"], p["z"]) for p in c["components"].values()] + [(fins["mass"], z_fin_center)]
 	if m_gimbal > 0:
 		fixed.append((m_gimbal, z_gimbal))
+	if m_launcher > 0:
+		fixed.append((m_launcher, z_launcher))
 
 	m_fixed = sum(m for m, _ in fixed)
 	m_mot = n_mot * mot["mass"]
@@ -127,7 +134,10 @@ def main():
 		I += parallel_axis(box_inertia(p["mass"], *p["size"]), p["mass"], [0, 0, p["z"] - cg])
 
 	if m_gimbal > 0:
-		I += parallel_axis(np.diag([1e-5, 1e-5, 1e-5]), m_gimbal, [0, 0, z_gimbal - cg])
+		I += parallel_axis(box_inertia(m_gimbal, 0.08, 0.08, 0.10), m_gimbal, [gimbal.get("offset_x", 0.028), 0, z_gimbal - cg])
+
+	if m_launcher > 0:
+		I += parallel_axis(box_inertia(m_launcher, 0.04, 0.04, 0.12), m_launcher, [launcher.get("offset_x", -0.035), 0, z_launcher - cg])
 
 	# 4 Tail fins
 	m_single_fin = fins["mass"] / 4
@@ -219,7 +229,8 @@ def main():
 		   wing_area_total=wing_area_total, wing_pair_area=wing_pair_area,
 		   wing_cla=wing_cla, arm_len=arm_len, r_arm_mid=r_arm_mid,
 		   z_ground_rel_cg=z_ground_rel_cg, spawn_z=spawn_z,
-		   gimbal=gimbal, m_gimbal=m_gimbal)
+		   gimbal=gimbal, m_gimbal=m_gimbal,
+		   launcher=launcher, m_launcher=m_launcher)
 
 	with open(os.path.join(model_dir, "model.sdf"), "w") as f:
 		f.write(sdf(geo))
@@ -285,12 +296,19 @@ def sdf(g):
 	ring_z = L_cyl - ring_len / 2 - cg
 	vis += cylinder_visual("accent_ring_visual", f"0 0 {ring_z:.4f} 0 0 0", r_f + 0.0005, ring_len, accent_dark)
 
-	# Nose cone
+	# Flat nose bulkhead mounting plate (Düz burun aynası - kubbemsi yapı kaldırıldı)
+	z_deck = fus["length"] - cg
 	vis += f"""
-      <visual name="nose_visual">
-        <pose>0 0 {L_cyl - cg:.4f} 0 0 0</pose>
-        <geometry><ellipsoid><radii>{r_f:.4f} {r_f:.4f} {fus["nose_length"]:.4f}</radii></ellipsoid></geometry>
-        <material><ambient>{body_grey}</ambient><diffuse>{body_grey}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+      <!-- Flat Nose Bulkhead Mounting Deck (Düz Burun Montaj Aynası - Kubbemsi Yapı Kaldırıldı) -->
+      <visual name="nose_bulkhead_deck_visual">
+        <pose>0 0 {z_deck - 0.003:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>{r_f:.4f}</radius><length>0.006</length></cylinder></geometry>
+        <material><ambient>0.14 0.15 0.18 1</ambient><diffuse>0.14 0.15 0.18 1</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+      </visual>
+      <visual name="nose_bulkhead_beveled_rim_visual">
+        <pose>0 0 {z_deck:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>{r_f + 0.0012:.4f}</radius><length>0.003</length></cylinder></geometry>
+        <material><ambient>0.26 0.27 0.30 1</ambient><diffuse>0.26 0.27 0.30 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
       </visual>"""
 
 	# Optical seeker turret on nose tip
@@ -301,21 +319,118 @@ def sdf(g):
 	if not gimbal_enabled:
 		vis += f"""
       <visual name="seeker_turret_visual">
-        <pose>0 0 {cam_lens_z - 0.015:.4f} 0 0 0</pose>
+        <pose>0 0 {z_deck + 0.015:.4f} 0 0 0</pose>
         <geometry><cylinder><radius>0.022</radius><length>0.035</length></cylinder></geometry>
         <material><ambient>{accent_dark}</ambient><diffuse>{accent_dark}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>
       <visual name="camera_lens_visual">
-        <pose>0 0 {cam_lens_z:.4f} 0 0 0</pose>
+        <pose>0 0 {z_deck + 0.032:.4f} 0 0 0</pose>
         <geometry><sphere><radius>0.014</radius></sphere></geometry>
         <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
       </visual>"""
 	else:
+		cam_x = gimbal.get("offset_x", 0.038)
+		ped_h = gimbal.get("pedestal_height", 0.030)
+		z_ped_top = z_deck + ped_h
+		# Storm32 Top Vibration Damper Base Assembly on Bulkhead Deck
+		z_damp_base = z_ped_top + 0.002
+		z_damp_balls = z_damp_base + 0.007
+		z_damp_lower = z_damp_balls + 0.007
+		d_off = 0.018  # spacing of 4 damping balls
 		vis += f"""
-      <visual name="gimbal_base_collar_visual">
-        <pose>0 0 {cam_lens_z - 0.020:.4f} 0 0 0</pose>
-        <geometry><cylinder><radius>0.024</radius><length>0.015</length></cylinder></geometry>
-        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
+      <!-- Storm32 Riser Mount Pedestal (Kamera ve Gimbali Yükseltme Braketi) -->
+      <visual name="storm32_riser_pedestal_visual">
+        <pose>{cam_x:.4f} 0 {z_deck + ped_h / 2:.4f} 0 0 0</pose>
+        <geometry><box><size>0.046 0.046 {ped_h:.4f}</size></box></geometry>
+        <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="storm32_riser_collar_visual">
+        <pose>{cam_x:.4f} 0 {z_ped_top:.4f} 0 0 0</pose>
+        <geometry><box><size>0.052 0.052 0.003</size></box></geometry>
+        <material><ambient>0.24 0.24 0.26 1</ambient><diffuse>0.24 0.24 0.26 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+      <!-- Storm32 3-Axis Gimbal: Upper Mounting Base Plate on Nose Deck -->
+      <visual name="storm32_base_plate_visual">
+        <pose>{cam_x:.4f} 0 {z_damp_base:.4f} 0 0 0</pose>
+        <geometry><box><size>0.054 0.054 0.003</size></box></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- Storm32: 4 Anti-Vibration Damping Rubber Balls (Titreşim Emici Lastik Takozlar) -->
+      <visual name="storm32_damper_ball_0_visual">
+        <pose>{cam_x + d_off:.4f} {d_off:.4f} {z_damp_balls:.4f} 0 0 0</pose>
+        <geometry><sphere><radius>0.0055</radius></sphere></geometry>
+        <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
+      </visual>
+      <visual name="storm32_damper_ball_1_visual">
+        <pose>{cam_x + d_off:.4f} {-d_off:.4f} {z_damp_balls:.4f} 0 0 0</pose>
+        <geometry><sphere><radius>0.0055</radius></sphere></geometry>
+        <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
+      </visual>
+      <visual name="storm32_damper_ball_2_visual">
+        <pose>{cam_x - d_off:.4f} {d_off:.4f} {z_damp_balls:.4f} 0 0 0</pose>
+        <geometry><sphere><radius>0.0055</radius></sphere></geometry>
+        <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
+      </visual>
+      <visual name="storm32_damper_ball_3_visual">
+        <pose>{cam_x - d_off:.4f} {-d_off:.4f} {z_damp_balls:.4f} 0 0 0</pose>
+        <geometry><sphere><radius>0.0055</radius></sphere></geometry>
+        <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
+      </visual>
+      <!-- Storm32: Lower Decoupled Chassis Plate -->
+      <visual name="storm32_decoupled_plate_visual">
+        <pose>{cam_x:.4f} 0 {z_damp_lower:.4f} 0 0 0</pose>
+        <geometry><box><size>0.052 0.052 0.0025</size></box></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- Storm32 BGC 32-Bit Controller Board (Elektronik Kontrol Kartı) -->
+      <visual name="storm32_bgc_board_visual">
+        <pose>{cam_x:.4f} 0 {z_damp_lower + 0.002:.4f} 0 0 0</pose>
+        <geometry><box><size>0.040 0.040 0.0018</size></box></geometry>
+        <material><ambient>0.06 0.14 0.32 1</ambient><diffuse>0.06 0.14 0.32 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <visual name="storm32_board_mcu_chip_visual">
+        <pose>{cam_x:.4f} 0.005 {z_damp_lower + 0.0035:.4f} 0 0 0</pose>
+        <geometry><box><size>0.012 0.012 0.0015</size></box></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material>
+      </visual>
+      <visual name="storm32_board_usb_port_visual">
+        <pose>{cam_x - 0.018:.4f} -0.012 {z_damp_lower + 0.0035:.4f} 0 0 0</pose>
+        <geometry><box><size>0.007 0.008 0.003</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse><specular>0.8 0.8 0.8 1</specular></material>
+      </visual>"""
+
+	launcher = g.get("launcher", {})
+	launcher_enabled = launcher.get("enabled", False)
+	if launcher_enabled:
+		b_x = launcher.get("offset_x", -0.046)
+		z_pivot = z_deck + 0.012
+		vis += f"""
+      <!-- MITLA 2.0 Net Launcher: Heavy-Duty CNC Aluminum Trunnion Mounts on Bulkhead -->
+      <visual name="mitla_mount_stanchion_left_visual">
+        <pose>{b_x:.4f} 0.0240 {z_deck + 0.006:.4f} 0 0 0</pose>
+        <geometry><box><size>0.016 0.008 0.014</size></box></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="mitla_mount_stanchion_right_visual">
+        <pose>{b_x:.4f} -0.0240 {z_deck + 0.006:.4f} 0 0 0</pose>
+        <geometry><box><size>0.016 0.008 0.014</size></box></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- MITLA 2.0: High-Torque Digital Metal-Gear Tilt Servo Actuator (-20 to 90 deg) -->
+      <visual name="mitla_servo_body_visual">
+        <pose>{b_x - 0.008:.4f} 0.020 {z_deck + 0.008:.4f} 0 0 0</pose>
+        <geometry><box><size>0.018 0.034 0.018</size></box></geometry>
+        <material><ambient>0.08 0.22 0.45 1</ambient><diffuse>0.08 0.22 0.45 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+      <visual name="mitla_servo_heatsink_visual">
+        <pose>{b_x - 0.008:.4f} 0.020 {z_deck + 0.008:.4f} 0 0 0</pose>
+        <geometry><box><size>0.0188 0.024 0.008</size></box></geometry>
+        <material><ambient>0.6 0.6 0.65 1</ambient><diffuse>0.6 0.6 0.65 1</diffuse><specular>0.8 0.8 0.8 1</specular></material>
+      </visual>
+      <visual name="mitla_servo_horn_visual">
+        <pose>{b_x:.4f} 0.026 {z_pivot:.4f} 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.005</radius><length>0.018</length></cylinder></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material>
       </visual>"""
 
 	# 4 Tail fins at the rear
@@ -419,7 +534,7 @@ def sdf(g):
 	camera = ""
 	if c.get("camera", {}).get("enabled"):
 		cam = c["camera"]
-		cam_pose = "0 0 0 0 -1.5708 0" if gimbal_enabled else f"0 0 {fus['length'] - cg:.4f} 0 -1.5708 0"
+		cam_pose = "0 0 0.033 0 -1.5708 0" if gimbal_enabled else f"0 0 {fus['length'] - cg:.4f} 0 -1.5708 0"
 		camera = f"""
       <sensor name="nose_camera" type="camera">
         <pose>{cam_pose}</pose>
@@ -491,28 +606,57 @@ def sdf(g):
 	gimbal_sdf = ""
 	gimbal_plugins = ""
 	if gimbal_enabled:
-		m_g = g.get("m_gimbal", 0.12) / 2
+		m_tot_g = g.get("m_gimbal", 0.304)
+		m_yaw = 0.090
+		m_roll = 0.090
+		m_pitch = 0.124
+		cam_x = gimbal.get("offset_x", 0.038)
+		ped_h = gimbal.get("pedestal_height", 0.030)
+		z_yaw = z_deck + ped_h + 0.028
+		z_roll = z_yaw + 0.036
+		x_roll = cam_x + 0.026
+		z_pitch = z_yaw + 0.061
+		x_pitch = cam_x
+
 		yaw_lim = math.radians(gimbal.get("yaw_limit_deg", 45))
-		pitch_lim = math.radians(gimbal.get("pitch_limit_deg", 45))
-		p_gain = gimbal.get("p_gain", 5.0)
-		i_gain = gimbal.get("i_gain", 0.1)
-		d_gain = gimbal.get("d_gain", 0.05)
+		roll_lim = math.radians(gimbal.get("roll_limit_deg", 35))
+		pitch_lim = math.radians(gimbal.get("pitch_limit_deg", 60))
+		p_gain = gimbal.get("p_gain", 8.0)
+		i_gain = gimbal.get("i_gain", 1.0)
+		d_gain = gimbal.get("d_gain", 0.10)
 
 		gimbal_sdf = f"""
-    <!-- 2-Axis Gimbal: Yaw Joint & Link (+/- {gimbal.get("yaw_limit_deg", 45)} deg around fuselage z) -->
+    <!-- Storm32 3-Axis Gimbal: Yaw Joint & Link (Pan +/- {gimbal.get("yaw_limit_deg", 45)} deg around fuselage z) -->
     <link name="gimbal_yaw_link">
-      <pose>0 0 {cam_lens_z - 0.010:.4f} 0 0 0</pose>
+      <pose>{cam_x:.4f} 0 {z_yaw:.4f} 0 0 0</pose>
       <inertial>
-        <mass>{m_g:.4f}</mass>
+        <mass>{m_yaw:.4f}</mass>
         <inertia>
-          <ixx>0.0005</ixx><ixy>0</ixy><ixz>0</ixz>
-          <iyy>0.0005</iyy><iyz>0</iyz><izz>0.0005</izz>
+          <ixx>0.00008</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00008</iyy><iyz>0</iyz><izz>0.00010</izz>
         </inertia>
       </inertial>
-      <visual name="gimbal_yaw_yoke_visual">
-        <pose>0 0 0 0 0 0</pose>
-        <geometry><cylinder><radius>0.022</radius><length>0.016</length></cylinder></geometry>
-        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
+      <!-- Yaw Brushless Pancake Motor Housing (2804/2805 fırçasız motor) -->
+      <visual name="storm32_yaw_motor_visual">
+        <pose>0 0 0.0065 0 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.013</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.10 1</ambient><diffuse>0.08 0.08 0.10 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <visual name="storm32_yaw_motor_vent_ring_visual">
+        <pose>0 0 0.0065 0 0 0</pose>
+        <geometry><cylinder><radius>0.0144</radius><length>0.004</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.48 1</ambient><diffuse>0.45 0.45 0.48 1</diffuse><specular>0.7 0.7 0.7 1</specular></material>
+      </visual>
+      <!-- Yaw-to-Roll CNC Aluminum Arm Bracket -->
+      <visual name="storm32_yaw_arm_base_visual">
+        <pose>{(x_roll - cam_x) / 2:.4f} 0 0.014 0 0 0</pose>
+        <geometry><box><size>{abs(x_roll - cam_x):.4f} 0.012 0.005</size></box></geometry>
+        <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="storm32_yaw_arm_riser_visual">
+        <pose>{x_roll - cam_x:.4f} 0 {(z_roll - z_yaw) / 2 + 0.006:.4f} 0 0 0</pose>
+        <geometry><box><size>0.006 0.012 {z_roll - z_yaw:.4f}</size></box></geometry>
+        <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
     </link>
 
@@ -527,39 +671,152 @@ def sdf(g):
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
-        <dynamics><damping>0.03</damping><friction>0.005</friction></dynamics>
+        <dynamics><damping>0.02</damping><friction>0.005</friction></dynamics>
       </axis>
       <physics>
-        <ode>
-          <implicit_spring_damper>1</implicit_spring_damper>
-        </ode>
+        <ode><implicit_spring_damper>1</implicit_spring_damper></ode>
       </physics>
     </joint>
 
-    <!-- 2-Axis Gimbal: Pitch Joint & Link (+/- {gimbal.get("pitch_limit_deg", 45)} deg around cross y) with Camera -->
-    <link name="gimbal_pitch_link">
-      <pose>0 0 {cam_lens_z:.4f} 0 0 0</pose>
+    <!-- Storm32 3-Axis Gimbal: Roll Joint & Link (Roll +/- {gimbal.get("roll_limit_deg", 35)} deg around longitudinal axis) -->
+    <link name="gimbal_roll_link">
+      <pose>{x_roll:.4f} 0 {z_roll:.4f} 0 0 0</pose>
       <inertial>
-        <mass>{m_g:.4f}</mass>
+        <mass>{m_roll:.4f}</mass>
         <inertia>
-          <ixx>0.0005</ixx><ixy>0</ixy><ixz>0</ixz>
-          <iyy>0.0005</iyy><iyz>0</iyz><izz>0.0005</izz>
+          <ixx>0.00008</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00008</iyy><iyz>0</iyz><izz>0.00008</izz>
         </inertia>
       </inertial>
-      <visual name="seeker_turret_visual">
-        <pose>0 0 -0.010 0 0 0</pose>
-        <geometry><sphere><radius>0.020</radius></sphere></geometry>
-        <material><ambient>{accent_dark}</ambient><diffuse>{accent_dark}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+      <!-- Roll Brushless Pancake Motor (2804 fırçasız motor) -->
+      <visual name="storm32_roll_motor_visual">
+        <pose>0 0 0 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.013</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.10 1</ambient><diffuse>0.08 0.08 0.10 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
       </visual>
-      <visual name="camera_lens_visual">
-        <pose>0 0 0.005 0 0 0</pose>
-        <geometry><cylinder><radius>0.012</radius><length>0.010</length></cylinder></geometry>
-        <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
+      <visual name="storm32_roll_motor_accent_visual">
+        <pose>0 0 0 0 1.5708 0</pose>
+        <geometry><cylinder><radius>0.0144</radius><length>0.004</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.48 1</ambient><diffuse>0.45 0.45 0.48 1</diffuse><specular>0.7 0.7 0.7 1</specular></material>
+      </visual>
+      <!-- Roll-to-Pitch Curved CNC Bracket Arm wrapping to Pitch Motor (+Y) -->
+      <visual name="storm32_roll_arm_lateral_visual">
+        <pose>0 0.012 {(z_pitch - z_roll) / 2:.4f} 0 0 0</pose>
+        <geometry><box><size>0.006 0.024 {z_pitch - z_roll:.4f}</size></box></geometry>
+        <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="storm32_roll_arm_pitch_mount_visual">
+        <pose>{cam_x - x_roll:.4f} 0.024 {z_pitch - z_roll:.4f} 0 0 0</pose>
+        <geometry><box><size>0.022 0.006 0.018</size></box></geometry>
+        <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+    </link>
+
+    <joint name="gimbal_roll_joint" type="revolute">
+      <parent>gimbal_yaw_link</parent>
+      <child>gimbal_roll_link</child>
+      <axis>
+        <xyz>1 0 0</xyz>
+        <limit>
+          <lower>{-roll_lim:.4f}</lower>
+          <upper>{roll_lim:.4f}</upper>
+          <effort>5</effort>
+          <velocity>10</velocity>
+        </limit>
+        <dynamics><damping>0.02</damping><friction>0.005</friction></dynamics>
+      </axis>
+      <physics>
+        <ode><implicit_spring_damper>1</implicit_spring_damper></ode>
+      </physics>
+    </joint>
+
+    <!-- Storm32 3-Axis Gimbal: Pitch Joint & Link (+/- {gimbal.get("pitch_limit_deg", 60)} deg around transverse y axis) with Seeker Camera -->
+    <link name="gimbal_pitch_link">
+      <pose>{cam_x:.4f} 0 {z_pitch:.4f} 0 0 0</pose>
+      <inertial>
+        <mass>{m_pitch:.4f}</mass>
+        <inertia>
+          <ixx>0.00012</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00012</iyy><iyz>0</iyz><izz>0.00010</izz>
+        </inertia>
+      </inertial>
+      <!-- Pitch Brushless Pancake Motor on Left/Port Side (+Y) -->
+      <visual name="storm32_pitch_motor_visual">
+        <pose>0 0.022 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.013</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.10 1</ambient><diffuse>0.08 0.08 0.10 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <visual name="storm32_pitch_motor_accent_visual">
+        <pose>0 0.022 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.0144</radius><length>0.004</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.48 1</ambient><diffuse>0.45 0.45 0.48 1</diffuse><specular>0.7 0.7 0.7 1</specular></material>
+      </visual>
+      <!-- Opposite Bearing Stanchion on Starboard Side (-Y) -->
+      <visual name="storm32_pitch_bearing_visual">
+        <pose>0 -0.020 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.007</radius><length>0.008</length></cylinder></geometry>
+        <material><ambient>0.3 0.3 0.35 1</ambient><diffuse>0.3 0.3 0.35 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+      <!-- CNC Aluminum Camera Cage / Cradle Frame -->
+      <visual name="storm32_camera_cage_base_visual">
+        <pose>0 0 -0.014 0 0 0</pose>
+        <geometry><box><size>0.026 0.034 0.003</size></box></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.14 0.14 0.16 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="storm32_camera_cage_left_visual">
+        <pose>0 0.016 0 0 0 0</pose>
+        <geometry><box><size>0.024 0.003 0.026</size></box></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.14 0.14 0.16 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <visual name="storm32_camera_cage_right_visual">
+        <pose>0 -0.016 0 0 0 0</pose>
+        <geometry><box><size>0.024 0.003 0.026</size></box></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.14 0.14 0.16 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- High-Performance Seeker Camera Body (Aksiyon / FPV Kamera Gövdesi - Uzatılmış) -->
+      <visual name="storm32_camera_body_visual">
+        <pose>0 0 0.002 0 0 0</pose>
+        <geometry><box><size>0.024 0.028 0.028</size></box></geometry>
+        <material><ambient>0.06 0.06 0.07 1</ambient><diffuse>0.06 0.06 0.07 1</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+      </visual>
+      <!-- Optical Lens Barrel (Optik Kamera Lensi - Uzatılmış Tasarım) -->
+      <visual name="camera_lens_barrel_visual">
+        <pose>0 0 0.024 0 0 0</pose>
+        <geometry><cylinder><radius>0.0085</radius><length>0.018</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.10 1</ambient><diffuse>0.08 0.08 0.10 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <visual name="camera_focus_ring_visual">
+        <pose>0 0 0.021 0 0 0</pose>
+        <geometry><cylinder><radius>0.0094</radius><length>0.006</length></cylinder></geometry>
+        <material><ambient>0.28 0.28 0.30 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+      <!-- Knurled Aperture / Lens Hood Ring at Tip -->
+      <visual name="camera_lens_hood_visual">
+        <pose>0 0 0.031 0 0 0</pose>
+        <geometry><cylinder><radius>0.0092</radius><length>0.004</length></cylinder></geometry>
+        <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- Front Optical Glass Element (Cam Mercek Yüzeyi) -->
+      <visual name="camera_glass_element_visual">
+        <pose>0 0 0.0325 0 0 0</pose>
+        <geometry><cylinder><radius>0.0075</radius><length>0.0015</length></cylinder></geometry>
+        <material><ambient>0.01 0.02 0.06 1</ambient><diffuse>0.01 0.02 0.06 1</diffuse><specular>0.98 0.98 0.98 1</specular></material>
+      </visual>
+      <!-- Gimbal Silicone Motor Wires (Renkli Motor Kabloları) -->
+      <visual name="storm32_wire_bundle_red_visual">
+        <pose>0 0.019 -0.008 0 0 0</pose>
+        <geometry><cylinder><radius>0.001</radius><length>0.016</length></cylinder></geometry>
+        <material><ambient>0.85 0.1 0.1 1</ambient><diffuse>0.85 0.1 0.1 1</diffuse></material>
+      </visual>
+      <visual name="storm32_wire_bundle_blue_visual">
+        <pose>0 0.021 -0.008 0 0 0</pose>
+        <geometry><cylinder><radius>0.001</radius><length>0.016</length></cylinder></geometry>
+        <material><ambient>0.1 0.2 0.85 1</ambient><diffuse>0.1 0.2 0.85 1</diffuse></material>
       </visual>{camera}
     </link>
 
     <joint name="gimbal_pitch_joint" type="revolute">
-      <parent>gimbal_yaw_link</parent>
+      <parent>gimbal_roll_link</parent>
       <child>gimbal_pitch_link</child>
       <axis>
         <xyz>0 1 0</xyz>
@@ -569,27 +826,36 @@ def sdf(g):
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
-        <dynamics><damping>0.03</damping><friction>0.005</friction></dynamics>
+        <dynamics><damping>0.02</damping><friction>0.005</friction></dynamics>
       </axis>
       <physics>
-        <ode>
-          <implicit_spring_damper>1</implicit_spring_damper>
-        </ode>
+        <ode><implicit_spring_damper>1</implicit_spring_damper></ode>
       </physics>
     </joint>"""
 
 		gimbal_plugins = f"""
-    <!-- 2-Axis Gimbal Joint Position Controllers -->
+    <!-- Storm32 3-Axis Gimbal Joint Position Controllers -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_yaw_joint</joint_name>
       <sub_topic>command/seeker_yaw</sub_topic>
       <p_gain>{p_gain}</p_gain>
       <i_gain>{i_gain}</i_gain>
       <d_gain>{d_gain}</d_gain>
-      <i_max>1.0</i_max>
-      <i_min>-1.0</i_min>
-      <cmd_max>2.0</cmd_max>
-      <cmd_min>-2.0</cmd_min>
+      <i_max>2.0</i_max>
+      <i_min>-2.0</i_min>
+      <cmd_max>5.0</cmd_max>
+      <cmd_min>-5.0</cmd_min>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_roll_joint</joint_name>
+      <sub_topic>command/seeker_roll</sub_topic>
+      <p_gain>{p_gain}</p_gain>
+      <i_gain>{i_gain}</i_gain>
+      <d_gain>{d_gain}</d_gain>
+      <i_max>2.0</i_max>
+      <i_min>-2.0</i_min>
+      <cmd_max>5.0</cmd_max>
+      <cmd_min>-5.0</cmd_min>
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_pitch_joint</joint_name>
@@ -597,10 +863,143 @@ def sdf(g):
       <p_gain>{p_gain}</p_gain>
       <i_gain>{i_gain}</i_gain>
       <d_gain>{d_gain}</d_gain>
-      <i_max>1.0</i_max>
-      <i_min>-1.0</i_min>
-      <cmd_max>2.0</cmd_max>
-      <cmd_min>-2.0</cmd_min>
+      <i_max>2.0</i_max>
+      <i_min>-2.0</i_min>
+      <cmd_max>5.0</cmd_max>
+      <cmd_min>-5.0</cmd_min>
+    </plugin>"""
+
+	launcher_sdf = ""
+	launcher_plugins = ""
+	if launcher_enabled:
+		b_x = launcher.get("offset_x", -0.046)
+		z_pivot = z_deck + 0.012
+		b_diam = launcher.get("barrel_diameter", 0.040)
+		b_rad = b_diam / 2.0
+		b_len = launcher.get("barrel_length", 0.120)
+		bore_diam = launcher.get("bore_diameter", 0.034)
+		bore_rad = bore_diam / 2.0
+		m_b = g.get("m_launcher", 0.380)
+		p_min = math.radians(launcher.get("pitch_min_deg", -10.0))
+		p_max = math.radians(launcher.get("pitch_max_deg", 90.0))
+		lp_gain = launcher.get("p_gain", 12.0)
+		li_gain = launcher.get("i_gain", 1.2)
+		ld_gain = launcher.get("d_gain", 0.25)
+
+		launcher_sdf = f"""
+    <!-- MITLA 2.0 Net Launcher Mechanism: Revolute Joint & Link ({launcher.get("pitch_min_deg", -10.0):.0f} to {launcher.get("pitch_max_deg", 90.0):.0f} deg elevation) -->
+    <link name="net_launcher_barrel_link">
+      <pose>{b_x:.4f} 0 {z_pivot:.4f} 0 0 0</pose>
+      <inertial>
+        <pose>0 0 0.035 0 0 0</pose>
+        <mass>{m_b:.4f}</mass>
+        <inertia>
+          <ixx>0.00050</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00050</iyy><iyz>0</iyz><izz>0.00008</izz>
+        </inertia>
+      </inertial>
+      <!-- Horizontal Pivot Trunnion Axle -->
+      <visual name="mitla_pivot_axle_visual">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.006</radius><length>0.052</length></cylinder></geometry>
+        <material><ambient>0.3 0.3 0.35 1</ambient><diffuse>0.3 0.3 0.35 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <!-- MITLA 2.0 Main Canister Tube (Diameter 40mm, Length 120mm / Çap 4cm, Yükseklik 12cm) -->
+      <visual name="mitla_canister_tube_visual">
+        <pose>0 0 0.042 0 0 0</pose>
+        <geometry><cylinder><radius>{b_rad:.4f}</radius><length>{b_len:.4f}</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- MITLA 2.0 High-Contrast Stencil Text Decal Plate ("MITLA 2.0") -->
+      <visual name="mitla_text_plate_visual">
+        <pose>-0.0202 0 0.048 0 0 0</pose>
+        <geometry><box><size>0.0005 0.018 0.065</size></box></geometry>
+        <material><ambient>0.92 0.92 0.92 1</ambient><diffuse>0.92 0.92 0.92 1</diffuse><specular>0.2 0.2 0.2 1</specular></material>
+      </visual>
+      <!-- MITLA 2.0 Tactical Warning / Hazard Stripe -->
+      <visual name="mitla_warning_stripe_visual">
+        <pose>-0.0202 0 0.008 0 0 0</pose>
+        <geometry><box><size>0.0005 0.014 0.012</size></box></geometry>
+        <material><ambient>0.9 0.7 0.1 1</ambient><diffuse>0.9 0.7 0.1 1</diffuse></material>
+      </visual>
+      <!-- Drone-Integrated Breech Cap & Electronic Firing Solenoid Module -->
+      <visual name="mitla_breech_cap_visual">
+        <pose>0 0 -0.010 0 0 0</pose>
+        <geometry><cylinder><radius>{b_rad + 0.0012:.4f}</radius><length>0.016</length></cylinder></geometry>
+        <material><ambient>0.22 0.22 0.25 1</ambient><diffuse>0.22 0.22 0.25 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+      <!-- Solenoid Trigger & Pressure Regulator Module -->
+      <visual name="mitla_firing_solenoid_visual">
+        <pose>-0.006 0 -0.020 0 0 0</pose>
+        <geometry><box><size>0.020 0.022 0.012</size></box></geometry>
+        <material><ambient>0.08 0.08 0.10 1</ambient><diffuse>0.08 0.08 0.10 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+      <!-- Electrical Mil-Spec Trigger Signal Port -->
+      <visual name="mitla_trigger_port_visual">
+        <pose>0.006 0 -0.021 0 0 0</pose>
+        <geometry><cylinder><radius>0.004</radius><length>0.010</length></cylinder></geometry>
+        <material><ambient>0.6 0.6 0.2 1</ambient><diffuse>0.7 0.7 0.2 1</diffuse><specular>0.8 0.8 0.3 1</specular></material>
+      </visual>
+      <!-- Tilt Yoke Linkage Arm connected to Servo -->
+      <visual name="mitla_tilt_linkage_arm_visual">
+        <pose>-0.008 0.022 -0.004 0 -0.20 0</pose>
+        <geometry><box><size>0.006 0.004 0.024</size></box></geometry>
+        <material><ambient>0.28 0.28 0.30 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <!-- Reinforced Muzzle Retention Collar at Ejection Tip -->
+      <visual name="mitla_muzzle_collar_visual">
+        <pose>0 0 0.096 0 0 0</pose>
+        <geometry><cylinder><radius>{b_rad + 0.0016:.4f}</radius><length>0.012</length></cylinder></geometry>
+        <material><ambient>0.25 0.25 0.28 1</ambient><diffuse>0.25 0.25 0.28 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+      </visual>
+      <!-- Hollow Bore Cavity Opening (Net Ejection Chamber / 3.6x3.6m Ağ Haznesi) -->
+      <visual name="mitla_bore_opening_visual">
+        <pose>0 0 0.1005 0 0 0</pose>
+        <geometry><cylinder><radius>{bore_rad:.4f}</radius><length>0.003</length></cylinder></geometry>
+        <material><ambient>0.01 0.01 0.01 1</ambient><diffuse>0.01 0.01 0.01 1</diffuse></material>
+      </visual>
+      <!-- Weighted Net Deployment Pellets inside Bore -->
+      <visual name="mitla_pellet_visual">
+        <pose>0 0 0.098 0 0 0</pose>
+        <geometry><cylinder><radius>{bore_rad - 0.004:.4f}</radius><length>0.004</length></cylinder></geometry>
+        <material><ambient>0.6 0.6 0.65 1</ambient><diffuse>0.6 0.6 0.65 1</diffuse><specular>0.8 0.8 0.8 1</specular></material>
+      </visual>
+      <collision name="mitla_canister_collision">
+        <pose>0 0 0.042 0 0 0</pose>
+        <geometry><cylinder><radius>{b_rad:.4f}</radius><length>{b_len:.4f}</length></cylinder></geometry>
+      </collision>
+    </link>
+
+    <joint name="net_launcher_barrel_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>net_launcher_barrel_link</child>
+      <axis>
+        <xyz>0 -1 0</xyz>
+        <limit>
+          <lower>{p_min:.4f}</lower>
+          <upper>{p_max:.4f}</upper>
+          <effort>15</effort>
+          <velocity>8</velocity>
+        </limit>
+        <dynamics><damping>0.05</damping><friction>0.01</friction></dynamics>
+      </axis>
+      <physics>
+        <ode><implicit_spring_damper>1</implicit_spring_damper></ode>
+      </physics>
+    </joint>"""
+
+		launcher_plugins = f"""
+    <!-- MITLA 2.0 Net Launcher Barrel Joint Position Controller (0 - 110 deg elevation) -->
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>net_launcher_barrel_joint</joint_name>
+      <sub_topic>command/net_launcher_pitch</sub_topic>
+      <p_gain>{lp_gain}</p_gain>
+      <i_gain>{li_gain}</i_gain>
+      <d_gain>{ld_gain}</d_gain>
+      <i_max>5.0</i_max>
+      <i_min>-5.0</i_min>
+      <cmd_max>20.0</cmd_max>
+      <cmd_min>-20.0</cmd_min>
     </plugin>"""
 
 	return f"""<?xml version="1.0"?>
@@ -646,8 +1045,10 @@ def sdf(g):
     </link>
 {rotors}
 {gimbal_sdf}
+{launcher_sdf}
 {plugins}
 {gimbal_plugins}
+{launcher_plugins}
 
     <!-- Wing arms LiftDrag Pair A (45 deg / -135 deg diagonal) -->
     <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
@@ -752,10 +1153,11 @@ def airframe(g, thr_hover, w_min):
 	gimbal = c.get("gimbal", {})
 	if gimbal.get("enabled", False):
 		cam += f"""
-# 2-axis nose seeker gimbal (+/- {gimbal.get("yaw_limit_deg", 45)} deg, autonomous seeker control)
+# Storm32 3-axis nose seeker gimbal (+/- {gimbal.get("yaw_limit_deg", 45)} deg yaw, +/- {gimbal.get("roll_limit_deg", 35)} deg roll, +/- {gimbal.get("pitch_limit_deg", 60)} deg pitch)
 param set-default MNT_MODE_OUT 0
 param set-default MNT_RANGE_YAW {gimbal.get("yaw_limit_deg", 45):.1f}
-param set-default MNT_RANGE_PITCH {gimbal.get("pitch_limit_deg", 45):.1f}
+param set-default MNT_RANGE_ROLL {gimbal.get("roll_limit_deg", 35):.1f}
+param set-default MNT_RANGE_PITCH {gimbal.get("pitch_limit_deg", 60):.1f}
 """
 
 	body = "\n".join(lines)
@@ -788,8 +1190,8 @@ param set-default MPC_THR_HOVER {thr_hover:.2f}
 param set-default MPC_TILTMAX_AIR 78
 param set-default MPC_XY_VEL_MAX 45
 param set-default MPC_XY_CRUISE 38
-param set-default MPC_ACC_HOR_MAX 5.5
-param set-default MPC_ACC_HOR 3.5
+param set-default MPC_ACC_HOR_MAX 15.0
+param set-default MPC_ACC_HOR 10.0
 param set-default MPC_Z_VEL_MAX_UP 12
 param set-default MPC_Z_VEL_MAX_DN 4.0
 

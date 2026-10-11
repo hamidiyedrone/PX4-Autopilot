@@ -208,7 +208,9 @@ def main():
         cg_num += comp["mass"] * comp["z"]
     cg_num += cfg["fuselage"]["mass"] * fus_len / 2
     cg = cg_num / total_mass
-    cam_offset_body = np.array([0.0, 0.0, fus_len - cg])  # nose in body FLU (z up)
+    cam_offset_x = cfg.get("camera", {}).get("offset_x", 0.038)
+    ped_h = cfg.get("gimbal", {}).get("pedestal_height", 0.030)
+    cam_offset_body = np.array([cam_offset_x, 0.0, (fus_len - cg) + ped_h + 0.094])  # nose camera on Storm32 gimbal in body FLU (z up)
 
     # gz transport
     node = Node()
