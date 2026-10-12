@@ -13,7 +13,7 @@ parameters:
         INT_STANDOFF:
             description:
                 short: Desired terminal standoff distance
-                long: Distance in meters to maintain behind target during close pursuit visual tracking.
+                long: Horizontal distance in meters to maintain behind target during close pursuit.
             type: float
             default: 3.0
             min: 1.0
@@ -22,7 +22,7 @@ parameters:
 
         INT_MIN_CLOSING:
             description:
-                short: Minimum closing speed in position guidance
+                short: Minimum closing speed in approach guidance
                 long: Minimum relative closing speed (m/s) maintained in midcourse position approach guidance.
             type: float
             default: 6.0
@@ -32,8 +32,8 @@ parameters:
 
         INT_KP_OPT:
             description:
-                short: Optical size error velocity gain
-                long: Proportional speed gain (m/s per normalized size error) commanding forward pursuit speed offset.
+                short: Standoff distance error velocity gain
+                long: Proportional speed gain commanding forward pursuit speed offset from horizontal distance error.
             type: float
             default: 4.5
             min: 0.5
@@ -50,20 +50,39 @@ parameters:
             max: 10.0
             decimal: 2
 
-
         INT_KP_LAT:
             description:
                 short: Proportional gain for lateral visual tracking
-                long: Proportional gain (m/s per unit screen error cx - 0.5) for centering target horizontally.
+                long: Proportional gain (m/s per unit screen error) for centering target horizontally.
             type: float
-            default: 2.0
-            min: 0.5
-            max: 15.0
+            default: 1.0
+            min: 0.1
+            max: 5.0
             decimal: 2
+
+        INT_LAT_VEL_MAX:
+            description:
+                short: Maximum lateral strafe speed in close pursuit
+                long: Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking.
+            type: float
+            default: 0.8
+            min: 0.0
+            max: 5.0
+            decimal: 1
+
+        INT_CRN_BRAKE:
+            description:
+                short: Maximum corner braking speed reduction
+                long: Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit.
+            type: float
+            default: 5.0
+            min: 0.0
+            max: 10.0
+            decimal: 1
 
         INT_KP_Z:
             description:
-                short: Altitude tracking proportional gain
+                short: Close pursuit altitude tracking proportional gain
                 long: Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking.
             type: float
             default: 0.6
@@ -81,6 +100,16 @@ parameters:
             max: 1.0
             decimal: 2
 
+        INT_ACC_Z_CL:
+            description:
+                short: Close pursuit vertical acceleration limit
+                long: Maximum vertical acceleration (m/s^2) in close pursuit to prevent pitch oscillations.
+            type: float
+            default: 1.2
+            min: 0.2
+            max: 5.0
+            decimal: 1
+
         INT_KP_Z_APP:
             description:
                 short: Approach mode altitude tracking proportional gain
@@ -93,10 +122,20 @@ parameters:
 
         INT_YAW_RATE:
             description:
-                short: Maximum heading slew rate
-                long: Maximum heading change rate (deg/s) in intercept pursuit guidance.
+                short: Maximum heading slew rate in approach
+                long: Maximum heading change rate (deg/s) in midcourse approach guidance.
             type: float
             default: 42.0
+            min: 5.0
+            max: 90.0
+            decimal: 1
+
+        INT_YAW_RATE_CL:
+            description:
+                short: Maximum heading slew rate in close pursuit
+                long: Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting.
+            type: float
+            default: 18.0
             min: 5.0
             max: 60.0
             decimal: 1

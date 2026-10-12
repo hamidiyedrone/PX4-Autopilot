@@ -90,8 +90,12 @@ private:
 	void ReplyToArmingCheck(uint8_t request_id);
 	void UpdateTarget();
 	void UpdateVisualDetection();
+	void ResetGuidanceState();
+	void PublishTrajectorySetpoint(const matrix::Vector3f &vel_cmd, float yaw_cmd);
+	void PublishPositionHoldSetpoint(const matrix::Vector3f &hold_pos, float hold_yaw);
 	void ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 	void ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -162,9 +166,8 @@ private:
 	float _filt_closing_speed{0.f};
 	hrt_abstime _last_approach_time{0};
 
-	// Line-of-sight unit vector in inertial NED frame
+	// Line-of-sight unit vector in inertial NED frame (for telemetry/status)
 	matrix::Vector3f _last_los_ned{};
-	bool _los_ned_valid{false};
 
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
@@ -173,13 +176,16 @@ private:
 		(ParamFloat<px4::params::INT_KP_OPT>) _param_int_kp_opt,
 		(ParamFloat<px4::params::INT_KD_OPT>) _param_int_kd_opt,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
-		(ParamFloat<px4::params::MPC_ACC_HOR_MAX>) _param_mpc_acc_hor_max,
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max,
 		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
+		(ParamFloat<px4::params::INT_LAT_VEL_MAX>) _param_int_lat_vel_max,
+		(ParamFloat<px4::params::INT_CRN_BRAKE>) _param_int_crn_brake,
 		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
 		(ParamFloat<px4::params::INT_Z_TOL>) _param_int_z_tol,
+		(ParamFloat<px4::params::INT_ACC_Z_CL>) _param_int_acc_z_cl,
 		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
 		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate,
+		(ParamFloat<px4::params::INT_YAW_RATE_CL>) _param_int_yaw_rate_cl,
 		(ParamFloat<px4::params::INT_LOST_TIMEOUT>) _param_int_lost_timeout
 	)
 };
