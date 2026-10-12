@@ -525,23 +525,35 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		vel_cmd(2) = vz_desired;
 	}
 
-	// 4. Smooth Seeker Yaw: point nose at target azimuth in world NED frame
-	// Deadband corridor on horizontal camera center (+/- 0.04 around 0.50):
-	// When target is within [0.46, 0.54], hold current heading steady to eliminate yaw hunting!
-	// When outside, turn smoothly at a gentle rate (max 18 deg/s) well within multicopter control bandwidth.
+	// 4. Optical-Centering Seeker Yaw:
+	// Automatically cancels Pitch-Roll kinematic coupling by feeding back horizontal optical offset (cx - 0.50).
+	// When drone banks (rolls) during high-speed forward flight, the camera optical axis rotates
+	// in azimuth relative to vehicle heading. Adding optical azimuth correction keeps the target
+	// pinned dead-center on the HUD crosshair.
 	float desired_yaw = _last_cmd_valid ? _last_yaw_cmd : _local_pos.heading;
 	if (los_xy_norm > 0.20f && current_horiz_dist > 0.8f) {
-		constexpr float YAW_DEADBAND_LOW = 0.46f;
-		constexpr float YAW_DEADBAND_HIGH = 0.54f;
-		if (cx < YAW_DEADBAND_LOW || cx > YAW_DEADBAND_HIGH) {
-			desired_yaw = atan2f(los_ned(1), los_ned(0));
+		const float los_yaw = atan2f(los_ned(1), los_ned(0));
+
+		// Camera horizontal FOV = 80 deg. Optical azimuth error angle:
+		constexpr float HFOV_RAD = math::radians(80.0f);
+		constexpr float OPTICAL_YAW_GAIN = 2.0f * tanf(HFOV_RAD / 2.0f); // ~1.678 rad
+		const float visual_yaw_offset = (cx - 0.50f) * OPTICAL_YAW_GAIN;
+
+		// Deadband corridor around screen center: +/- 0.025 (corridor [0.475, 0.525])
+		constexpr float YAW_DEADBAND = 0.025f;
+		if (fabsf(cx - 0.50f) > YAW_DEADBAND) {
+			desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset);
 		}
 	}
 
 	if (_last_cmd_valid && dt > 0.005f) {
-		// Limit maximum yaw rate to 18 deg/s in close pursuit to eliminate overshoot and phase-lag limit cycle
+		// Soft deceleration (tapering): smoothly reduce maximum yaw rate as target approaches center
+		// Eliminates overshoot completely by docking gently at the deadband threshold
+		const float center_dist = fabsf(cx - 0.50f);
+		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, 0.25f, 1.0f);
 		constexpr float MAX_CLOSE_YAW_RATE_RAD = math::radians(18.0f);
-		const float max_dyaw = MAX_CLOSE_YAW_RATE_RAD * dt;
+		const float max_dyaw = (MAX_CLOSE_YAW_RATE_RAD * rate_factor) * dt;
+
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
 		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
 	} else {
