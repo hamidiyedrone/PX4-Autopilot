@@ -442,17 +442,14 @@ def draw_flight_data(img, tel, sim_t, w, h, gmb_data=None, fps=None):
     fps_str = f"FPS {fps:5.1f}" if fps is not None and fps > 0.1 else "FPS   ---"
     hud_text(img, fps_str, (24 * s, 54 * s), 0.5 * s)
 
-    # gimbal angles relative to forward boresight (top right, 2 lines like bottom left)
-    gmb_yaw = gmb_pitch = None
+    # gimbal pitch relative to forward boresight (top right)
+    gmb_pitch = None
     if gmb_data is not None:
-        gmb_yaw = gmb_data.get("yaw")
         gmb_pitch = gmb_data.get("pitch")
 
     x_tr = w - 24 * s
     y_tr = 30 * s
-    dy_tr = 24 * s
-    hud_text(img, "GMB YAW   " + fmt(gmb_yaw, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
-    hud_text(img, "GMB PITCH " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr + dy_tr), 0.55 * s, "right")
+    hud_text(img, "GMB PITCH " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
 
 
 def draw_hud(img, tracking_data, width, height):
@@ -571,7 +568,7 @@ def main():
 
     node = Node()
     state = {"poses": {}, "t": 0.0, "last_frame": None, "new_frame": False,
-             "gmb_yaw": 0.0, "gmb_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
+             "gmb_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
              "fps": 0.0, "last_frame_time": 0.0}
 
     def on_clock(msg):
@@ -581,9 +578,6 @@ def main():
         for p in msg.pose:
             if p.name in (a.interceptor, a.target):
                 state["poses"][p.name] = p
-
-    def on_gmb_yaw(msg):
-        state["gmb_yaw"] = msg.data
 
     def on_gmb_pitch(msg):
         state["gmb_pitch"] = msg.data
@@ -620,7 +614,6 @@ def main():
 
     node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
-    node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_yaw", on_gmb_yaw)
     node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
     node.subscribe(Double_V, f"/model/{a.interceptor}/detection", on_detection)
 
@@ -678,24 +671,20 @@ def main():
             # Camera position is always at the interceptor nose in world frame
             p_cam_world = p_int + R_int @ cam_offset_body
 
-            # Gimbal camera orientation from commanded seeker pitch and yaw angles
+            # Gimbal camera orientation from commanded seeker pitch angle (pitch-only tilt)
             pitch_rad = float(state.get("gmb_pitch", 0.0))
-            yaw_rad = float(state.get("gmb_yaw", 0.0))
             pitch_deg = math.degrees(pitch_rad)
-            yaw_deg = math.degrees(yaw_rad)
 
             gmb_data = {
-                "yaw": yaw_deg,
                 "pitch": pitch_deg,
             }
 
             cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
-            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            # Relative gimbal rotation in body FLU: yaw around +Z, pitch around transverse +Y
+            # Relative gimbal rotation in body FLU: pitch around transverse +Y
             R_rel = np.array([
-                [ cy * cp, -sy,  cy * sp],
-                [ sy * cp,  cy,  sy * sp],
-                [    -sp,   0.,      cp ]
+                [ cp,  0.,  sp],
+                [ 0.,  1.,  0.],
+                [-sp,  0.,  cp]
             ])
 
             # Camera orientation in world frame = vehicle body attitude * gimbal relative rotation

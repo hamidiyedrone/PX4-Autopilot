@@ -321,8 +321,7 @@ def main():
     last_sim_time = 0.0
     last_print = 0.0
 
-    # 2-Axis Kinematic Seeker Gimbal state (physical rate limits)
-    gmb_psi = 0.0      # current yaw / azimuth angle [rad]
+    # Kinematic Seeker Gimbal state (pitch tilt, physical rate limits)
     gmb_theta = 0.0    # current pitch / elevation angle [rad]
     # Physical maximum slew rate (default 90 deg/s)
     max_rate_rad = math.radians(gimbal_cfg.get("max_rate_deg_s", 90.0))
@@ -400,7 +399,6 @@ def main():
         # Kinematic Seeker Gimbal: Pitch-Only Active Tracking (Yaw locked to 0 boresight)
         if gimbal_enabled and pub_gimbal_yaw is not None and pub_gimbal_pitch is not None:
             # 1. Yaw axis locked firmly to 0 boresight (azimuth handled by drone heading)
-            gmb_psi = 0.0
             msg_y = Double()
             msg_y.data = 0.0
             pub_gimbal_yaw.publish(msg_y)
