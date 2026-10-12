@@ -154,6 +154,11 @@ def load_intercept_param_metadata():
 				"short": "Terminal lateral cornering brake speed reduction",
 				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
 			},
+			"INT_TRM_BRK_TOL": {
+				"name": "INT_TRM_BRK_TOL", "type": "float", "default": 0.25, "min": 0.05, "max": 0.45, "decimal": 2,
+				"short": "Terminal corner braking deadband tolerance",
+				"long": "Lateral screen offset deadband (+/- from center 0.50) before corner braking activates. 0.25 gives corridor [0.25, 0.75]."
+			},
 			"INT_TRM_KP_Z": {
 				"name": "INT_TRM_KP_Z", "type": "float", "default": 0.6, "min": 0.1, "max": 5.0, "decimal": 2,
 				"short": "Terminal altitude tracking proportional gain",

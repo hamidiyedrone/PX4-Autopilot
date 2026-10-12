@@ -481,16 +481,22 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
 
 	// Adaptive lateral corner/swerve braking when close (< 5m):
-	// If the target shifts laterally away from boresight center, brake forward speed
-	// to tighten turn radius and prevent overshooting past the target.
+	// If the target shifts laterally away from boresight center past INT_TRM_BRK_TOL,
+	// brake forward speed to tighten turn radius and prevent overshooting past the target.
 	float corner_brake = 0.0f;
 	const float max_crn_brake = _param_int_trm_brk_lat.get();
-	if (current_range < 5.0f && max_crn_brake > 0.0f) {
+	const float crn_brake_tol = _param_int_trm_brk_tol.get();
+	if (current_range < 5.0f && max_crn_brake > 0.0f && crn_brake_tol > 0.0f) {
 		const float lat_offset = fabsf(cx - 0.50f);
-		constexpr float LAT_BRAKE_DEADBAND = 0.08f; // center corridor [0.42, 0.58]
-		if (lat_offset > LAT_BRAKE_DEADBAND) {
-			const float lat_drift = lat_offset - LAT_BRAKE_DEADBAND;
-			corner_brake = math::constrain(lat_drift * 15.0f, 0.0f, max_crn_brake);
+		if (lat_offset > crn_brake_tol) {
+			const float lat_drift = lat_offset - crn_brake_tol;
+			const float max_possible_drift = math::max(0.50f - crn_brake_tol, 0.05f);
+			corner_brake = math::constrain((lat_drift / max_possible_drift) * max_crn_brake, 0.0f, max_crn_brake);
+
+			// If already lagging behind target (dist_err > 0), scale down corner brake to avoid falling further behind
+			if (dist_err > 0.0f) {
+				corner_brake *= math::constrain(1.0f - dist_err * 0.5f, 0.0f, 1.0f);
+			}
 		}
 	}
 

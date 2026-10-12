@@ -110,6 +110,16 @@ parameters:
             max: 10.0
             decimal: 1
 
+        INT_TRM_BRK_TOL:
+            description:
+                short: Terminal corner braking deadband tolerance
+                long: Lateral screen offset deadband (+/- from center 0.50) before corner braking activates. 0.25 gives corridor [0.25, 0.75].
+            type: float
+            default: 0.25
+            min: 0.05
+            max: 0.45
+            decimal: 2
+
         INT_TRM_KP_Z:
             description:
                 short: Terminal altitude tracking proportional gain

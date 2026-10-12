@@ -181,6 +181,7 @@ private:
 		(ParamFloat<px4::params::INT_TRM_KP_LAT>) _param_int_trm_kp_lat,
 		(ParamFloat<px4::params::INT_TRM_LAT_MAX>) _param_int_trm_lat_max,
 		(ParamFloat<px4::params::INT_TRM_BRK_LAT>) _param_int_trm_brk_lat,
+		(ParamFloat<px4::params::INT_TRM_BRK_TOL>) _param_int_trm_brk_tol,
 		(ParamFloat<px4::params::INT_TRM_KP_Z>) _param_int_trm_kp_z,
 		(ParamFloat<px4::params::INT_TRM_Z_TOL>) _param_int_trm_z_tol,
 		(ParamFloat<px4::params::INT_TRM_ACC_Z>) _param_int_trm_acc_z,
