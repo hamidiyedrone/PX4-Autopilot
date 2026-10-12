@@ -598,37 +598,37 @@ def generate_batch_reports(results):
     avg_rv = float(np.mean([r.get("min_basket_rv_m", 999) for r in results])) if results else 0.0
 
     lines = [
-        "# 25-Koşu Otomatik Combat Güdüm Değerlendirme Raporu",
+        "# 3D Blended APN & Sanal Sepet Güdüm 25-Koşu Otomatik Değerlendirme Raporu",
         "",
         f"**Tarih:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
         f"**Toplam Koşu:** {len(results)} / 25  ",
         f"**Yakalama Oranı (Net Fired):** {captured_count} / {len(results)} (%{captured_count*100.0/max(1, len(results)):.1f})  ",
-        f"**Ortalama Skor:** {avg_score:.1f} / 100  ",
-        f"**Ortalama En Yakın Mesafe (R_v):** {avg_rv:.2f} m  ",
+        f"**Ortalama 3D APN Güdüm Skoru:** {avg_score:.1f} / 100  ",
+        f"**Ortalama En Yakın Sepet Mesafesi (R_v):** {avg_rv:.2f} m (Hedef: <= 2.2m)  ",
         "",
         "## Koşu Sonuç Tablosu",
         "",
-        "| ID | Grup | Senaryo Adı | Min R_v [m] | Kapanma V_c [m/s] | Pitch Salınım [°] | Ağ Atıldı mı? | Skor | Durum |",
+        "| ID | Grup | Senaryo Adı | Sepet Hatası R_v [m] | Kapanma V_c [m/s] | Pitch Salınım [°] | Ağ Atıldı mı? | APN Skoru | Durum |",
         "| :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |"
     ]
 
     for r in results:
-        status_sym = "✅ Başarılı" if r.get("net_fired") else "⚠️ İyileştirme Gerek"
+        status_sym = "✅ Başarılı (Captured)" if r.get("net_fired") else "⚠️ İyileştirme Gerek"
         lines.append(f"| RUN-{r['run_id']:02d} | `{r['group']}` | {r['name']} | "
-                     f"{r.get('min_basket_rv_m', '-')} | {r.get('mean_closing_vc', '-')} | "
+                     f"{r.get('min_basket_rv_m', '-')} m | {r.get('mean_closing_vc', '-')} m/s | "
                      f"{r.get('pitch_osc_deg', '-')}° | {'EVET' if r.get('net_fired') else 'HAYIR'} | "
                      f"{r.get('score', 0)}/100 | {status_sym} |")
 
     lines.extend([
         "",
-        "## Grup Bazlı Performans Değerlendirmesi",
+        "## 3D Blended APN Algoritması Grup Bazlı Analizi",
         "",
-        "- **Speed Grubu (RUN 01-04):** Temel hız aralıkları (24-32 m/s).",
-        "- **Weave Grubu (RUN 05-08):** Kaçınma S-dönüşleri ve lateral APN tepkisi.",
-        "- **Turn Grubu (RUN 09-12):** Sert yüksek-G kırılma dönüşleri ve merkezkaç ivmesi.",
-        "- **Vertical Grubu (RUN 13-16):** Dikey dalış ve dik tırmanış irtifa takibi.",
-        "- **Throttle Grubu (RUN 17-20):** Ani fren ve gaz açma kapanma şokları.",
-        "- **Combat Grubu (RUN 21-25):** Bileşik 3D kombine kaçınma manevraları.",
+        "- **Speed Grubu (RUN 01-04):** Düz hat yüksek hızda APN yaklaşma rotası, V_c_des regülasyonu ve sepet oturma PID stabilitesi.",
+        "- **Weave Grubu (RUN 05-08):** Kaçınma S-dönüşlerinde yanal APN ivmesi a_cmd_apn_lat ve R_core (2.5m) fishtailing sönümlemesi.",
+        "- **Turn Grubu (RUN 09-12):** Yüksek-G sert virajlarda merkezkaç ivmesi a_t_perp telafisi ve Seeker Gimbal takip doyması.",
+        "- **Vertical Grubu (RUN 13-16):** Dikey dalış/tırmanışta önleyici pitch açısı ile irtifa kontrolü ayrışması ve dikey APN tepkisi.",
+        "- **Throttle Grubu (RUN 17-20):** Hedef ani fren yaptığında geriye takla klamplaması (a_long >= -4.5 m/s²) ve sepet anti-windup koruması.",
+        "- **Combat Grubu (RUN 21-25):** 3D uzayda bileşik APN güdüm dayanıklılığı, blending filtre sürekliliği ve MITLA 2.0 nihai yakalama zarfı.",
         ""
     ])
 
