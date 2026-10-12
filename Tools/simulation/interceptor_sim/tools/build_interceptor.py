@@ -134,10 +134,10 @@ def main():
 		I += parallel_axis(box_inertia(p["mass"], *p["size"]), p["mass"], [0, 0, p["z"] - cg])
 
 	if m_gimbal > 0:
-		I += parallel_axis(box_inertia(m_gimbal, 0.08, 0.08, 0.10), m_gimbal, [gimbal.get("offset_x", 0.028), 0, z_gimbal - cg])
+		I += parallel_axis(box_inertia(m_gimbal, 0.08, 0.08, 0.10), m_gimbal, [gimbal.get("offset_x", -0.038), 0, z_gimbal - cg])
 
 	if m_launcher > 0:
-		I += parallel_axis(box_inertia(m_launcher, 0.04, 0.04, 0.12), m_launcher, [launcher.get("offset_x", -0.035), 0, z_launcher - cg])
+		I += parallel_axis(box_inertia(m_launcher, 0.04, 0.04, 0.12), m_launcher, [launcher.get("offset_x", 0.046), 0, z_launcher - cg])
 
 	# 4 Tail fins
 	m_single_fin = fins["mass"] / 4
@@ -329,7 +329,7 @@ def sdf(g):
         <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
       </visual>"""
 	else:
-		cam_x = gimbal.get("offset_x", 0.038)
+		cam_x = gimbal.get("offset_x", -0.038)
 		ped_h = gimbal.get("pedestal_height", 0.030)
 		z_ped_top = z_deck + ped_h
 		# Storm32 Top Vibration Damper Base Assembly on Bulkhead Deck
@@ -402,7 +402,7 @@ def sdf(g):
 	launcher = g.get("launcher", {})
 	launcher_enabled = launcher.get("enabled", False)
 	if launcher_enabled:
-		b_x = launcher.get("offset_x", -0.046)
+		b_x = launcher.get("offset_x", 0.046)
 		z_pivot = z_deck + 0.012
 		vis += f"""
       <!-- MITLA 2.0 Net Launcher: Heavy-Duty CNC Aluminum Trunnion Mounts on Bulkhead -->
@@ -610,11 +610,12 @@ def sdf(g):
 		m_yaw = 0.090
 		m_roll = 0.090
 		m_pitch = 0.124
-		cam_x = gimbal.get("offset_x", 0.038)
+		cam_x = gimbal.get("offset_x", -0.038)
 		ped_h = gimbal.get("pedestal_height", 0.030)
 		z_yaw = z_deck + ped_h + 0.028
 		z_roll = z_yaw + 0.036
-		x_roll = cam_x + 0.026
+		x_sign = -1.0 if cam_x < 0 else 1.0
+		x_roll = cam_x + x_sign * 0.026
 		z_pitch = z_yaw + 0.061
 		x_pitch = cam_x
 
@@ -666,8 +667,8 @@ def sdf(g):
       <axis>
         <xyz>0 0 1</xyz>
         <limit>
-          <lower>{-yaw_lim:.4f}</lower>
-          <upper>{yaw_lim:.4f}</upper>
+          <lower>{-roll_lim:.4f}</lower>
+          <upper>{roll_lim:.4f}</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -678,7 +679,7 @@ def sdf(g):
       </physics>
     </joint>
 
-    <!-- Storm32 3-Axis Gimbal: Roll Joint & Link (Roll +/- {gimbal.get("roll_limit_deg", 35)} deg around longitudinal axis) -->
+    <!-- Storm32 3-Axis Gimbal: Pan Joint & Link (Azimuth +/- {gimbal.get("yaw_limit_deg", 45)} deg around dorsal axis) -->
     <link name="gimbal_roll_link">
       <pose>{x_roll:.4f} 0 {z_roll:.4f} 0 0 0</pose>
       <inertial>
@@ -716,10 +717,10 @@ def sdf(g):
       <parent>gimbal_yaw_link</parent>
       <child>gimbal_roll_link</child>
       <axis>
-        <xyz>1 0 0</xyz>
+        <xyz>-1 0 0</xyz>
         <limit>
-          <lower>{-roll_lim:.4f}</lower>
-          <upper>{roll_lim:.4f}</upper>
+          <lower>{-yaw_lim:.4f}</lower>
+          <upper>{yaw_lim:.4f}</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -836,7 +837,7 @@ def sdf(g):
 		gimbal_plugins = f"""
     <!-- Storm32 3-Axis Gimbal Joint Position Controllers -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_yaw_joint</joint_name>
+      <joint_name>gimbal_roll_joint</joint_name>
       <sub_topic>command/seeker_yaw</sub_topic>
       <p_gain>{p_gain}</p_gain>
       <i_gain>{i_gain}</i_gain>
@@ -847,7 +848,7 @@ def sdf(g):
       <cmd_min>-5.0</cmd_min>
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_roll_joint</joint_name>
+      <joint_name>gimbal_yaw_joint</joint_name>
       <sub_topic>command/seeker_roll</sub_topic>
       <p_gain>{p_gain}</p_gain>
       <i_gain>{i_gain}</i_gain>
@@ -872,7 +873,7 @@ def sdf(g):
 	launcher_sdf = ""
 	launcher_plugins = ""
 	if launcher_enabled:
-		b_x = launcher.get("offset_x", -0.046)
+		b_x = launcher.get("offset_x", 0.046)
 		z_pivot = z_deck + 0.012
 		b_diam = launcher.get("barrel_diameter", 0.040)
 		b_rad = b_diam / 2.0
@@ -880,14 +881,14 @@ def sdf(g):
 		bore_diam = launcher.get("bore_diameter", 0.034)
 		bore_rad = bore_diam / 2.0
 		m_b = g.get("m_launcher", 0.380)
-		p_min = math.radians(launcher.get("pitch_min_deg", -10.0))
-		p_max = math.radians(launcher.get("pitch_max_deg", 90.0))
+		p_min = math.radians(launcher.get("pitch_min_deg", -45.0))
+		p_max = math.radians(launcher.get("pitch_max_deg", 45.0))
 		lp_gain = launcher.get("p_gain", 12.0)
 		li_gain = launcher.get("i_gain", 1.2)
 		ld_gain = launcher.get("d_gain", 0.25)
 
 		launcher_sdf = f"""
-    <!-- MITLA 2.0 Net Launcher Mechanism: Revolute Joint & Link ({launcher.get("pitch_min_deg", -10.0):.0f} to {launcher.get("pitch_max_deg", 90.0):.0f} deg elevation) -->
+    <!-- MITLA 2.0 Net Launcher Mechanism: Revolute Joint & Link ({launcher.get("pitch_min_deg", -45.0):.0f} to {launcher.get("pitch_max_deg", 45.0):.0f} deg elevation) -->
     <link name="net_launcher_barrel_link">
       <pose>{b_x:.4f} 0 {z_pivot:.4f} 0 0 0</pose>
       <inertial>
@@ -974,7 +975,7 @@ def sdf(g):
       <parent>base_link</parent>
       <child>net_launcher_barrel_link</child>
       <axis>
-        <xyz>0 -1 0</xyz>
+        <xyz>0 1 0</xyz>
         <limit>
           <lower>{p_min:.4f}</lower>
           <upper>{p_max:.4f}</upper>

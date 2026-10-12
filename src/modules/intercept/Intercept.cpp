@@ -297,6 +297,11 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	const float V_c_des = math::constrain(0.70f * R_v, 0.0f, 15.0f);
 	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
 
+	// Longitudinal closing acceleration along LOS to achieve and maintain V_c_des
+	const matrix::Vector3f v_err_apn = v_des_apn - self_vel;
+	const float a_long_apn_mag = math::constrain(v_err_apn.dot(u_los) * 2.2f, -4.5f, 35.0f);
+	const matrix::Vector3f a_cmd_apn = a_cmd_apn_lat + (u_los * a_long_apn_mag);
+
 	// 2. Yakın Faz: Sepete Oturma / Hız Eşitleme PID (R_v <= 5.0m)
 	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -5.0f, 5.0f);
 	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -5.0f, 5.0f);
@@ -315,7 +320,7 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	_sp_vel = v_des;
 
 	// Blended feedforward acceleration
-	a_cmd = (a_cmd_apn_lat * w) + (a_cmd_rendezvous * (1.0f - w));
+	a_cmd = (a_cmd_apn * w) + (a_cmd_rendezvous * (1.0f - w));
 
 	// Prevent violent pitch flip backwards during forward pursuit:
 	// When pursuing a forward-flying target, longitudinal deceleration along target track
@@ -374,17 +379,17 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const matrix::Vector3f u_t_horiz = matrix::Vector3f(u_t(0), u_t(1), 0.0f).normalized();
 
 	// Firing envelope criteria:
-	// 1. Sanal sepete <= 0.65m yaklaşma (R_v <= 0.65m)
-	const bool pos_ok = (r_v.norm() <= 0.65f);
-	// 2. Hız farkı <= 1.3 m/s
-	const bool vel_ok = ((self_vel - _target_vel).norm() <= 1.3f);
-	// 3. Vektörel paralellik >= 0.985 (~10 dereceden dar açı)
-	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.985f);
+	// 1. Sanal sepete <= 2.2m yaklaşma (R_v <= 2.2m: net canister tactical deployment window)
+	const bool pos_ok = (r_v.norm() <= 2.2f);
+	// 2. Hız farkı <= 2.5 m/s (hız eşitleme)
+	const bool vel_ok = ((self_vel - _target_vel).norm() <= 2.5f);
+	// 3. Vektörel paralellik >= 0.95 (~18 dereceden dar açı)
+	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.95f);
 
 	if (pos_ok && vel_ok && align_ok) {
 		_firing_counter++;
 
-		if (_firing_counter >= 10 && !_net_fired) {
+		if (_firing_counter >= 8 && !_net_fired) {
 			_net_fired = true;
 			_net_fire_time = hrt_absolute_time();
 			PX4_INFO(">>> NET GUN FIRED! TARGET CAPTURED! <<<");
@@ -521,7 +526,7 @@ void Intercept::Run()
 			_last_a_cmd = a_cmd;
 			_last_yaw_cmd = yaw_cmd;
 
-			// Feedforward acceleration + smooth pursuit velocity setpoint
+			// Feedforward acceleration + vertical position setpoint (decoupled horizontal velocity eliminates limit-cycle oscillation)
 			trajectory_setpoint_s sp{};
 			sp.timestamp = now;
 			// Altitude locked firmly to target basket height across all phases (rejects aerodynamic wing lift)
@@ -531,8 +536,8 @@ void Intercept::Run()
 			sp.acceleration[0] = a_cmd(0);
 			sp.acceleration[1] = a_cmd(1);
 			sp.acceleration[2] = _target_accel(2);
-			sp.velocity[0] = _sp_vel(0);
-			sp.velocity[1] = _sp_vel(1);
+			sp.velocity[0] = NAN;
+			sp.velocity[1] = NAN;
 			sp.velocity[2] = _v_v(2);
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;

@@ -66,17 +66,17 @@ camera:                 # nose seeker camera, streamed on udp 5600 by plugins/ca
   hfov_deg: 60
   rate: 60
   detect_port: 15600    # udp port of target_vision driver
-  offset_x: 0.038       # mounted on Storm32 3-axis gimbal (+X = 3.8 cm, near circle rim)
+  offset_x: -0.038      # mounted on Storm32 3-axis gimbal (-X = -3.8 cm, dorsal / TOP in forward flight)
 
 gimbal:                 # Storm32 3-axis lightweight brushless gimbal (yaw +/-45, roll +/-35, pitch -45..+60 deg)
   enabled: true
   type: "storm32_3axis"
-  yaw_limit_deg: 45     # azimuth/pan rotation around fuselage z axis (+/-45 deg)
+  yaw_limit_deg: 45     # azimuth/pan rotation (+/-45 deg)
   roll_limit_deg: 35    # roll stabilization rotation (+/-35 deg)
-  pitch_limit_deg: 60   # elevation/tilt rotation around transverse y axis (-45..+60 deg)
+  pitch_limit_deg: 60   # elevation/tilt rotation (-45..+60 deg)
   mass: 0.304           # Storm32 gimbal mass (304 g)
   size: [0.08, 0.08, 0.10] # 80x80x100 mm dimensions
-  offset_x: 0.038       # upper nose deck mount near outer rim (+X = 3.8 cm)
+  offset_x: -0.038      # dorsal / TOP nose deck mount near outer rim (-X = -3.8 cm)
   pedestal_height: 0.030 # elevated riser mount lifting gimbal and camera (+3 cm)
   p_gain: 8.0
   i_gain: 1.0
@@ -88,10 +88,10 @@ net_launcher:           # MITLA 2.0 (Süpürge 2.0) Anti-FPV Net Launcher mechan
   barrel_diameter: 0.04 # 40 mm outer diameter (4 cm)
   barrel_length: 0.12   # 120 mm length (12 cm - shortened compact tactical canister)
   bore_diameter: 0.034  # 34 mm inner bore diameter
-  pitch_min_deg: -10.0  # -10 deg max tilt toward camera
-  pitch_max_deg: 90.0   # 90 deg max tilt outward
+  pitch_min_deg: -45.0  # -45 deg max tilt toward dorsal/sky
+  pitch_max_deg: 45.0   # 45 deg max tilt toward ventral/ground
   mass: 0.380           # MITLA 2.0 compact net canister & pivot assembly mass (380 g)
-  offset_x: -0.046      # lower nose deck mount near outer rim (-X = -4.6 cm)
+  offset_x: 0.046       # ventral / BOTTOM nose deck mount near outer rim (+X = +4.6 cm)
   p_gain: 12.0
   i_gain: 1.2
   d_gain: 0.25

@@ -39,88 +39,88 @@
       </visual>
       <!-- Storm32 Riser Mount Pedestal (Kamera ve Gimbali Yükseltme Braketi) -->
       <visual name="storm32_riser_pedestal_visual">
-        <pose>0.0380 0 0.4585 0 0 0</pose>
+        <pose>-0.0380 0 0.4585 0 0 0</pose>
         <geometry><box><size>0.046 0.046 0.0300</size></box></geometry>
         <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <visual name="storm32_riser_collar_visual">
-        <pose>0.0380 0 0.4735 0 0 0</pose>
+        <pose>-0.0380 0 0.4735 0 0 0</pose>
         <geometry><box><size>0.052 0.052 0.003</size></box></geometry>
         <material><ambient>0.24 0.24 0.26 1</ambient><diffuse>0.24 0.24 0.26 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
       </visual>
       <!-- Storm32 3-Axis Gimbal: Upper Mounting Base Plate on Nose Deck -->
       <visual name="storm32_base_plate_visual">
-        <pose>0.0380 0 0.4755 0 0 0</pose>
+        <pose>-0.0380 0 0.4755 0 0 0</pose>
         <geometry><box><size>0.054 0.054 0.003</size></box></geometry>
         <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <!-- Storm32: 4 Anti-Vibration Damping Rubber Balls (Titreşim Emici Lastik Takozlar) -->
       <visual name="storm32_damper_ball_0_visual">
-        <pose>0.0560 0.0180 0.4825 0 0 0</pose>
+        <pose>-0.0200 0.0180 0.4825 0 0 0</pose>
         <geometry><sphere><radius>0.0055</radius></sphere></geometry>
         <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
       </visual>
       <visual name="storm32_damper_ball_1_visual">
-        <pose>0.0560 -0.0180 0.4825 0 0 0</pose>
+        <pose>-0.0200 -0.0180 0.4825 0 0 0</pose>
         <geometry><sphere><radius>0.0055</radius></sphere></geometry>
         <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
       </visual>
       <visual name="storm32_damper_ball_2_visual">
-        <pose>0.0200 0.0180 0.4825 0 0 0</pose>
+        <pose>-0.0560 0.0180 0.4825 0 0 0</pose>
         <geometry><sphere><radius>0.0055</radius></sphere></geometry>
         <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
       </visual>
       <visual name="storm32_damper_ball_3_visual">
-        <pose>0.0200 -0.0180 0.4825 0 0 0</pose>
+        <pose>-0.0560 -0.0180 0.4825 0 0 0</pose>
         <geometry><sphere><radius>0.0055</radius></sphere></geometry>
         <material><ambient>0.10 0.10 0.11 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse></material>
       </visual>
       <!-- Storm32: Lower Decoupled Chassis Plate -->
       <visual name="storm32_decoupled_plate_visual">
-        <pose>0.0380 0 0.4895 0 0 0</pose>
+        <pose>-0.0380 0 0.4895 0 0 0</pose>
         <geometry><box><size>0.052 0.052 0.0025</size></box></geometry>
         <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <!-- Storm32 BGC 32-Bit Controller Board (Elektronik Kontrol Kartı) -->
       <visual name="storm32_bgc_board_visual">
-        <pose>0.0380 0 0.4915 0 0 0</pose>
+        <pose>-0.0380 0 0.4915 0 0 0</pose>
         <geometry><box><size>0.040 0.040 0.0018</size></box></geometry>
         <material><ambient>0.06 0.14 0.32 1</ambient><diffuse>0.06 0.14 0.32 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
       </visual>
       <visual name="storm32_board_mcu_chip_visual">
-        <pose>0.0380 0.005 0.4930 0 0 0</pose>
+        <pose>-0.0380 0.005 0.4930 0 0 0</pose>
         <geometry><box><size>0.012 0.012 0.0015</size></box></geometry>
         <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material>
       </visual>
       <visual name="storm32_board_usb_port_visual">
-        <pose>0.0200 -0.012 0.4930 0 0 0</pose>
+        <pose>-0.0560 -0.012 0.4930 0 0 0</pose>
         <geometry><box><size>0.007 0.008 0.003</size></box></geometry>
         <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse><specular>0.8 0.8 0.8 1</specular></material>
       </visual>
       <!-- MITLA 2.0 Net Launcher: Heavy-Duty CNC Aluminum Trunnion Mounts on Bulkhead -->
       <visual name="mitla_mount_stanchion_left_visual">
-        <pose>-0.0460 0.0240 0.4495 0 0 0</pose>
+        <pose>0.0460 0.0240 0.4495 0 0 0</pose>
         <geometry><box><size>0.016 0.008 0.014</size></box></geometry>
         <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <visual name="mitla_mount_stanchion_right_visual">
-        <pose>-0.0460 -0.0240 0.4495 0 0 0</pose>
+        <pose>0.0460 -0.0240 0.4495 0 0 0</pose>
         <geometry><box><size>0.016 0.008 0.014</size></box></geometry>
         <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <!-- MITLA 2.0: High-Torque Digital Metal-Gear Tilt Servo Actuator (-20 to 90 deg) -->
       <visual name="mitla_servo_body_visual">
-        <pose>-0.0540 0.020 0.4515 0 0 0</pose>
+        <pose>0.0380 0.020 0.4515 0 0 0</pose>
         <geometry><box><size>0.018 0.034 0.018</size></box></geometry>
         <material><ambient>0.08 0.22 0.45 1</ambient><diffuse>0.08 0.22 0.45 1</diffuse><specular>0.5 0.5 0.5 1</specular></material>
       </visual>
       <visual name="mitla_servo_heatsink_visual">
-        <pose>-0.0540 0.020 0.4515 0 0 0</pose>
+        <pose>0.0380 0.020 0.4515 0 0 0</pose>
         <geometry><box><size>0.0188 0.024 0.008</size></box></geometry>
         <material><ambient>0.6 0.6 0.65 1</ambient><diffuse>0.6 0.6 0.65 1</diffuse><specular>0.8 0.8 0.8 1</specular></material>
       </visual>
       <visual name="mitla_servo_horn_visual">
-        <pose>-0.0460 0.026 0.4555 0 1.5708 0</pose>
+        <pose>0.0460 0.026 0.4555 0 1.5708 0</pose>
         <geometry><cylinder><radius>0.005</radius><length>0.018</length></cylinder></geometry>
         <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material>
       </visual>
@@ -421,7 +421,7 @@
 
     <!-- Storm32 3-Axis Gimbal: Yaw Joint & Link (Pan +/- 45 deg around fuselage z) -->
     <link name="gimbal_yaw_link">
-      <pose>0.0380 0 0.5015 0 0 0</pose>
+      <pose>-0.0380 0 0.5015 0 0 0</pose>
       <inertial>
         <mass>0.0900</mass>
         <inertia>
@@ -442,12 +442,12 @@
       </visual>
       <!-- Yaw-to-Roll CNC Aluminum Arm Bracket -->
       <visual name="storm32_yaw_arm_base_visual">
-        <pose>0.0130 0 0.014 0 0 0</pose>
+        <pose>-0.0130 0 0.014 0 0 0</pose>
         <geometry><box><size>0.0260 0.012 0.005</size></box></geometry>
         <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <visual name="storm32_yaw_arm_riser_visual">
-        <pose>0.0260 0 0.0240 0 0 0</pose>
+        <pose>-0.0260 0 0.0240 0 0 0</pose>
         <geometry><box><size>0.006 0.012 0.0360</size></box></geometry>
         <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
@@ -459,8 +459,8 @@
       <axis>
         <xyz>0 0 1</xyz>
         <limit>
-          <lower>-0.7854</lower>
-          <upper>0.7854</upper>
+          <lower>-0.6109</lower>
+          <upper>0.6109</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -471,9 +471,9 @@
       </physics>
     </joint>
 
-    <!-- Storm32 3-Axis Gimbal: Roll Joint & Link (Roll +/- 35 deg around longitudinal axis) -->
+    <!-- Storm32 3-Axis Gimbal: Pan Joint & Link (Azimuth +/- 45 deg around dorsal axis) -->
     <link name="gimbal_roll_link">
-      <pose>0.0640 0 0.5375 0 0 0</pose>
+      <pose>-0.0640 0 0.5375 0 0 0</pose>
       <inertial>
         <mass>0.0900</mass>
         <inertia>
@@ -499,7 +499,7 @@
         <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
       <visual name="storm32_roll_arm_pitch_mount_visual">
-        <pose>-0.0260 0.024 0.0250 0 0 0</pose>
+        <pose>0.0260 0.024 0.0250 0 0 0</pose>
         <geometry><box><size>0.022 0.006 0.018</size></box></geometry>
         <material><ambient>0.16 0.16 0.18 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
@@ -509,10 +509,10 @@
       <parent>gimbal_yaw_link</parent>
       <child>gimbal_roll_link</child>
       <axis>
-        <xyz>1 0 0</xyz>
+        <xyz>-1 0 0</xyz>
         <limit>
-          <lower>-0.6109</lower>
-          <upper>0.6109</upper>
+          <lower>-0.7854</lower>
+          <upper>0.7854</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -525,7 +525,7 @@
 
     <!-- Storm32 3-Axis Gimbal: Pitch Joint & Link (+/- 60 deg around transverse y axis) with Seeker Camera -->
     <link name="gimbal_pitch_link">
-      <pose>0.0380 0 0.5625 0 0 0</pose>
+      <pose>-0.0380 0 0.5625 0 0 0</pose>
       <inertial>
         <mass>0.1240</mass>
         <inertia>
@@ -624,8 +624,8 @@
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-1.40</lower>
-          <upper>1.40</upper>
+          <lower>-1.0472</lower>
+          <upper>1.0472</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -636,9 +636,9 @@
       </physics>
     </joint>
 
-    <!-- MITLA 2.0 Net Launcher Mechanism: Revolute Joint & Link (-10 to 90 deg elevation) -->
+    <!-- MITLA 2.0 Net Launcher Mechanism: Revolute Joint & Link (-45 to 45 deg elevation) -->
     <link name="net_launcher_barrel_link">
-      <pose>-0.0460 0 0.4555 0 0 0</pose>
+      <pose>0.0460 0 0.4555 0 0 0</pose>
       <inertial>
         <pose>0 0 0.035 0 0 0</pose>
         <mass>0.3800</mass>
@@ -723,10 +723,10 @@
       <parent>base_link</parent>
       <child>net_launcher_barrel_link</child>
       <axis>
-        <xyz>0 -1 0</xyz>
+        <xyz>0 1 0</xyz>
         <limit>
-          <lower>-0.1745</lower>
-          <upper>1.5708</upper>
+          <lower>-0.7854</lower>
+          <upper>0.7854</upper>
           <effort>15</effort>
           <velocity>8</velocity>
         </limit>
@@ -804,7 +804,7 @@
 
     <!-- Storm32 3-Axis Gimbal Joint Position Controllers -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_yaw_joint</joint_name>
+      <joint_name>gimbal_roll_joint</joint_name>
       <sub_topic>command/seeker_yaw</sub_topic>
       <p_gain>8.0</p_gain>
       <i_gain>1.0</i_gain>
@@ -815,7 +815,7 @@
       <cmd_min>-5.0</cmd_min>
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_roll_joint</joint_name>
+      <joint_name>gimbal_yaw_joint</joint_name>
       <sub_topic>command/seeker_roll</sub_topic>
       <p_gain>8.0</p_gain>
       <i_gain>1.0</i_gain>

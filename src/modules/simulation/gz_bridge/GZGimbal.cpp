@@ -91,19 +91,10 @@ void GZGimbal::Run()
 				    dt);
 		publishJointCommand(_gimbal_yaw_cmd_publisher, _yaw_stp, _yaw_rate_stp, _last_yaw_stp, _yaw_min, _yaw_max, dt);
 
-		// Transform from PX4 FRD body angles to Gazebo model FLU joint coordinates:
-		// Gazebo roll axis: +X Forward (same sign)
-		// Gazebo pitch axis: +Y Left (+pitch tilts camera down towards horizon from fuselage nose)
-		// Gazebo yaw axis: +Z Up (opposite of FRD Down) -> negate
-		const float roll_gz = _last_roll_stp;
-		const float pitch_gz = _last_pitch_stp;
-		const float yaw_gz = -_last_yaw_stp;
+		const float pitch_gz = math::constrain(_last_pitch_stp, -math::radians(60.0f), math::radians(60.0f));
+		const float yaw_gz = math::constrain(_last_yaw_stp, -math::radians(45.0f), math::radians(45.0f));
+		const float roll_gz = math::constrain(_last_roll_stp, -math::radians(35.0f), math::radians(35.0f));
 
-		if (_seeker_roll_cmd_publisher.Valid()) {
-			gz::msgs::Double msg_r;
-			msg_r.set_data(roll_gz);
-			_seeker_roll_cmd_publisher.Publish(msg_r);
-		}
 		if (_seeker_pitch_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_p;
 			msg_p.set_data(pitch_gz);
@@ -114,15 +105,17 @@ void GZGimbal::Run()
 			msg_y.set_data(yaw_gz);
 			_seeker_yaw_cmd_publisher.Publish(msg_y);
 		}
+		if (_seeker_roll_cmd_publisher.Valid()) {
+			gz::msgs::Double msg_r;
+			msg_r.set_data(roll_gz);
+			_seeker_roll_cmd_publisher.Publish(msg_r);
+		}
 
 		// MITLA 2.0 net launcher barrel elevation:
-		// Barrel joint in Gazebo is axis 0 -1 0 (-Y, Right).
-		// 0 rad = vertical (+Z, 90 deg up from horizontal).
-		// M_PI_2 rad = horizontal forward along +X.
-		// When tracking target, barrel aims along target elevation line-of-sight in body frame:
+		// Barrel rotates around lateral +Y axis in lockstep with the seeker pitch
 		if (_launcher_pitch_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_l;
-			const float barrel_pitch = math::constrain(M_PI_2_F - pitch_gz, 0.0f, M_PI_2_F + 0.1745f);
+			const float barrel_pitch = math::constrain(pitch_gz, -math::radians(45.0f), math::radians(45.0f));
 			msg_l.set_data(barrel_pitch);
 			_launcher_pitch_cmd_publisher.Publish(msg_l);
 		}
@@ -195,12 +188,27 @@ bool GZGimbal::pollSetpoint()
 					const matrix::Quatf q_vehicle(v_att.q);
 					q_cmd = q_vehicle.inversed() * q_cmd;
 				}
+
+				// Target unit vector in vehicle body FRD frame
+				const matrix::Vector3f u_frd = q_cmd.rotateVector(matrix::Vector3f(1.0f, 0.0f, 0.0f));
+
+				// Transform to Gazebo FLU body frame:
+				// X_gz = X_frd (transverse), Y_gz = -Y_frd (lateral), Z_gz = -Z_frd (fuselage nose forward)
+				const float x_b = u_frd(0);
+				const float y_b = -u_frd(1);
+				const float z_b = -u_frd(2);
+
+				const float z_fwd = math::max(z_b, 0.05f);
+				_pitch_stp = atan2f(x_b, z_fwd);
+				_yaw_stp = atan2f(y_b, z_fwd);
+				_roll_stp = 0.0f;
+			} else {
+				const matrix::Eulerf gimbal_att_stp(q_cmd);
+				_roll_stp = gimbal_att_stp.phi();
+				_pitch_stp = gimbal_att_stp.theta();
+				_yaw_stp = gimbal_att_stp.psi();
 			}
 
-			const matrix::Eulerf gimbal_att_stp(q_cmd);
-			_roll_stp = gimbal_att_stp.phi();
-			_pitch_stp = gimbal_att_stp.theta();
-			_yaw_stp = gimbal_att_stp.psi();
 			_roll_rate_stp = msg.angular_velocity_x;
 			_pitch_rate_stp = msg.angular_velocity_y;
 			_yaw_rate_stp = msg.angular_velocity_z;
