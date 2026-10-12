@@ -357,6 +357,19 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	_last_los_ned = los_ned;
 	_los_ned_valid = true;
 
+	// Decompose 3D Line-of-Sight into horizontal and vertical components:
+	const float los_xy_norm = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
+	const float inv_los_xy = (los_xy_norm > 0.01f) ? (1.0f / los_xy_norm) : 1.0f;
+	const float los_x_norm = los_ned(0) * inv_los_xy;
+	const float los_y_norm = los_ned(1) * inv_los_xy;
+
+	// 3D slant range along optical sightline from camera
+	const float current_range = math::max(_target_detection.range_m, 0.5f);
+
+	// True horizontal following distance (projection along the ground plane):
+	// d_horiz = range * cos(elevation) = range * los_xy_norm
+	const float current_horiz_dist = math::max(current_range * los_xy_norm, 0.1f);
+
 	// Current forward ground speed along heading
 	const float psi = _local_pos.heading;
 	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
@@ -377,23 +390,21 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 15.0f, max_xy_vel) - _target_speed_est);
 	}
 
-	// 2. Direct Range-Based Standoff Velocity Control (Pure Optical range_m)
-	const float current_dist = math::max(_target_detection.range_m, 0.5f);
-
-	// Estimate metric closing speed (m/s) from distance derivative with PT1 low-pass filter
+	// 2. Horizontal Standoff Velocity Control (using horizontal distance d_horiz)
+	// Estimate horizontal closing speed (m/s) from horizontal distance derivative:
 	if (_last_visual_dist < 0.0f) {
-		_last_visual_dist = current_dist;
+		_last_visual_dist = current_horiz_dist;
 		_filt_visual_closing_speed = 0.0f;
 	} else if (dt > 0.005f) {
-		const float raw_closing = (_last_visual_dist - current_dist) / dt;
+		const float raw_closing = (_last_visual_dist - current_horiz_dist) / dt;
 		constexpr float CLOSING_TAU = 0.15f;
 		const float alpha_close = math::constrain(dt / (CLOSING_TAU + dt), 0.05f, 0.50f);
 		_filt_visual_closing_speed += alpha_close * (math::constrain(raw_closing, -15.0f, 15.0f) - _filt_visual_closing_speed);
-		_last_visual_dist = current_dist;
+		_last_visual_dist = current_horiz_dist;
 	}
 
 	const float desired_dist = math::constrain(_param_int_standoff.get(), 1.0f, 10.0f);
-	const float dist_err = current_dist - desired_dist; // positive = too far, negative = too close
+	const float dist_err = current_horiz_dist - desired_dist; // positive = too far behind, negative = too close/underneath
 
 	// Desired closing speed tapers smoothly to 0 at standoff distance
 	const float desired_closing = math::constrain(0.40f * dist_err, -3.0f, 5.0f);
@@ -422,7 +433,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// If the target shifts laterally away from boresight center, brake forward speed
 	// to tighten turn radius and prevent overshooting / cutting past the target.
 	float corner_brake = 0.0f;
-	if (current_dist < 5.0f) {
+	if (current_range < 5.0f) {
 		const float lat_offset = fabsf(cx - 0.50f);
 		constexpr float LAT_BRAKE_DEADBAND = 0.08f; // center corridor [0.42, 0.58]
 		if (lat_offset > LAT_BRAKE_DEADBAND) {
@@ -431,8 +442,12 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		}
 	}
 
+	// Overhead protection: if drone is underneath the target (los_xy_norm is small / elevation is steep),
+	// throttle back forward speed to avoid rushing forward under the target and losing visual lock
+	const float overhead_factor = math::constrain(los_xy_norm / 0.70f, 0.25f, 1.0f);
+
 	// Commanded forward speed referenced to smooth optical target speed estimate
-	const float desired_fwd_speed = math::constrain(_target_speed_est + delta_v - corner_brake, 10.0f, max_xy_vel);
+	const float desired_fwd_speed = math::constrain((_target_speed_est + delta_v) * overhead_factor - corner_brake, 10.0f, max_xy_vel);
 
 	// Slew-rate limit forward speed command in close pursuit
 	// Smooth positive accel (max 2.0 m/s^2) eliminates pitch bobbing,
@@ -451,12 +466,6 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Longitudinal horizontal velocity along line of sight in XY plane
-	const float los_xy_norm = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
-	const float inv_los_xy = (los_xy_norm > 0.01f) ? (1.0f / los_xy_norm) : 1.0f;
-	const float los_x_norm = los_ned(0) * inv_los_xy;
-	const float los_y_norm = los_ned(1) * inv_los_xy;
-
 	// Lateral visual centering: deadband corridor +/- 0.04 around screen center (0.50)
 	const float kp_lat = _param_int_kp_lat.get();
 	float lat_err = 0.0f;
@@ -488,7 +497,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 	// Vertical altitude tracking with deadband corridor (+/- 0.30m)
 	// Computes physical altitude difference directly from optical line-of-sight elevation and metric distance:
-	const float delta_z = current_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
+	const float delta_z = current_range * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
 	const float z_tol = _param_int_z_tol.get(); // default 0.3m (+/- 30 cm deadband corridor)
 	float delta_z_corr = 0.0f;
@@ -516,8 +525,9 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 	// 4. Active Seeker Yaw: point nose directly at target azimuth in world NED frame
 	// Keeps target optical axis locked in the center of the camera horizontal FOV (+/- 30 deg)
+	// Protect against zenith singularity (when directly underneath, preserve heading instead of spinning)
 	float desired_yaw = _last_cmd_valid ? _last_yaw_cmd : _local_pos.heading;
-	if (los_xy_norm > 0.05f) {
+	if (los_xy_norm > 0.20f && current_horiz_dist > 0.8f) {
 		desired_yaw = atan2f(los_ned(1), los_ned(0));
 	}
 
