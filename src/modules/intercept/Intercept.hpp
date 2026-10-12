@@ -146,9 +146,19 @@ private:
 	hrt_abstime _last_target_update{0};
 	hrt_abstime _last_loop_time{0};
 
-	// Virtual capture basket and rendezvous states
+	enum class TargetSource : uint8_t {
+		NONE = 0,
+		GPS_FOLLOW_TARGET = 1,
+		VISION = 2,
+		DEAD_RECKONING = 3
+	};
+	TargetSource _target_source{TargetSource::NONE};
+
+	matrix::Vector3f _p_v{};
+	matrix::Vector3f _v_v{};
 	matrix::Vector3f _pos_integral{};
 	matrix::Vector3f _last_a_cmd{};
+	matrix::Vector3f _prev_a_cmd{};
 	float _last_yaw_cmd{0.f};
 	float _last_R_v{0.f};
 	float _last_V_c{0.f};

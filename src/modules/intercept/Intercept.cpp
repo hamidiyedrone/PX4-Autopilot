@@ -171,20 +171,19 @@ void Intercept::UpdateTarget(float dt)
 			_target_vel = new_target_vel;
 
 			_target_pos_valid = true;
+			_target_source = TargetSource::GPS_FOLLOW_TARGET;
 			_last_target_update = now;
 			new_sample_processed = true;
 		}
 	}
 
 	if (!new_sample_processed) {
-		if (_target_pos_valid && dt > 0.001f && dt < 0.05f) {
-			// 100 Hz kinematic dead-reckoning extrapolation between target telemetry frames
-			_target_pos += _target_vel * dt + _target_accel * (0.5f * dt * dt);
-			_target_vel += _target_accel * dt;
+		const bool follow_target_fresh = _has_follow_target && (hrt_elapsed_time(&_last_target_rx_time) < 1_s);
 
-		} else if (!_target_pos_valid && _visual_contact && _target_detection.range_valid
-			   && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)) {
-			// Vision fallback if ground-truth follow_target is not active
+		if (_visual_contact && _target_detection.range_valid
+		    && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)
+		    && (!follow_target_fresh || _target_detection.range_m < 20.0f)) {
+			// Visual tracking active (primary in terminal range <20m or when GPS follow_target is stale/unavailable)
 			const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
 			const matrix::Vector3f los_b(_target_detection.los_body[0], _target_detection.los_body[1], _target_detection.los_body[2]);
 			const matrix::Quatf q_att(_vehicle_attitude.q);
@@ -202,13 +201,21 @@ void Intercept::UpdateTarget(float dt)
 
 			_target_pos = vis_target_pos;
 			_target_pos_valid = true;
+			_target_source = TargetSource::VISION;
 			_last_target_update = now;
+
+		} else if (follow_target_fresh && _target_pos_valid && dt > 0.001f && dt < 0.05f) {
+			// 100 Hz kinematic dead-reckoning extrapolation between target telemetry frames
+			_target_pos += _target_vel * dt + _target_accel * (0.5f * dt * dt);
+			_target_vel += _target_accel * dt;
+			_target_source = TargetSource::DEAD_RECKONING;
 		}
 	}
 
 	// 3. Invalidate target if no update for more than 3 seconds
 	if (_target_pos_valid && (hrt_elapsed_time(&_last_target_update) > 3_s)) {
 		_target_pos_valid = false;
+		_target_source = TargetSource::NONE;
 		_pos_integral.zero();
 		_firing_counter = 0;
 	}
@@ -251,6 +258,8 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	const matrix::Vector3f p_v = _target_pos - (u_t * d_offset);
 	const matrix::Vector3f v_v = _target_vel;
 	const matrix::Vector3f a_v = _target_accel;
+	_p_v = p_v;
+	_v_v = v_v;
 
 	// -------------------------------------------------------------------------
 	// B. Bağıl Kinematik ve Görüş Hattı (LOS Kinematics)
@@ -280,25 +289,36 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	const float N = _param_int_apn_n.get(); // 3.8
 	const matrix::Vector3f a_t_perp = a_v - (u_los * a_v.dot(u_los));
 
-	const matrix::Vector3f a_cmd_apn = (omega_los.cross(u_los) * (N * math::max(V_c, 2.0f))) +
-					    (a_t_perp * (0.5f * N));
+	// Lateral APN steering acceleration (perpendicular to LOS: nullifies LOS rate omega_los)
+	const matrix::Vector3f a_cmd_apn_lat = (omega_los.cross(u_los) * (N * math::max(V_c, 2.0f))) +
+					       (a_t_perp * (0.5f * N));
+
+	// Desired pursuit velocity: sprint closing velocity when far, smooth deceleration approaching basket
+	const float V_c_des = math::constrain(0.70f * R_v, 0.0f, 15.0f);
+	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
 
 	// 2. Yakın Faz: Sepete Oturma / Hız Eşitleme PID (R_v <= 5.0m)
 	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -5.0f, 5.0f);
 	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -5.0f, 5.0f);
 	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -5.0f, 5.0f);
 
+	const matrix::Vector3f v_des_rdv = v_v + (r_v * 0.8f);
 	const matrix::Vector3f a_cmd_rendezvous = a_v +
 		matrix::Vector3f(6.5f * r_v(0), 6.5f * r_v(1), 7.0f * r_v(2)) +
 		matrix::Vector3f(4.2f * v_rel(0), 4.2f * v_rel(1), 4.5f * v_rel(2)) +
 		matrix::Vector3f(0.8f * _pos_integral(0), 0.8f * _pos_integral(1), 1.0f * _pos_integral(2));
 
-	// 3. Yumuşak Geçiş (Blending Filter)
-	const float w = math::constrain((R_v - 3.0f) / 3.0f, 0.0f, 1.0f);
-	a_cmd = (a_cmd_apn * w) + (a_cmd_rendezvous * (1.0f - w));
+	// 3. Yumuşak Geçiş (Blending Filter: 2.0m ile 6.0m arası)
+	const float w = math::constrain((R_v - 2.0f) / 4.0f, 0.0f, 1.0f);
+	const matrix::Vector3f v_des = (v_des_apn * w) + (v_des_rdv * (1.0f - w));
+
+	_sp_vel = v_des;
+
+	// Blended feedforward acceleration
+	a_cmd = (a_cmd_apn_lat * w) + (a_cmd_rendezvous * (1.0f - w));
 
 	// Guidance Phase Update
-	if (R_v > 5.0f) {
+	if (R_v > 6.0f) {
 		_guidance_phase = GuidancePhase::APN_CRUISE;
 	} else if (R_v > 2.0f) {
 		_guidance_phase = GuidancePhase::BLENDING;
@@ -306,7 +326,7 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 		_guidance_phase = _net_fired ? GuidancePhase::NET_FIRED : GuidancePhase::RENDEZVOUS;
 	}
 
-	// 4. İvme Doyumu
+	// 4. İvme Doyumu ve Yumuşatma (Jerk Limiter)
 	const float a_max = _param_int_acc_max.get(); // 55.0 m/s^2 (~5.6g)
 	const float a_cmd_norm = a_cmd.norm();
 
@@ -314,26 +334,19 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 		a_cmd = (a_cmd / a_cmd_norm) * a_max;
 	}
 
-	// 5. Takip Hız Setpointi (Slew-Rate Sınırlı Pürüzsüz Trajektori)
-	const float V_c_des = math::constrain(0.5f * R_v, 2.0f, 7.0f);
-	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
-	const matrix::Vector3f v_des_rdv = v_v + (r_v * 1.0f);
-	const matrix::Vector3f v_des = (v_des_apn * w) + (v_des_rdv * (1.0f - w));
+	// Jerk / slew-rate limit on commanded acceleration (prevents violent pitch snap)
+	const float max_jerk = 70.0f; // 70 m/s^3
+	const matrix::Vector3f da = a_cmd - _prev_a_cmd;
+	const float da_norm = da.norm();
 
-	if (!_sp_vel_initialized) {
-		_sp_vel = self_vel;
-		_sp_vel_initialized = true;
+	if (da_norm > max_jerk * dt) {
+		a_cmd = _prev_a_cmd + (da / da_norm) * (max_jerk * dt);
 	}
+	_prev_a_cmd = a_cmd;
 
-	const matrix::Vector3f dv = v_des - _sp_vel;
-	const float dv_norm = dv.norm();
-	const float max_dv = 15.0f * dt; // 0.15 m/s per 10ms tick
-
-	if (dv_norm > max_dv) {
-		_sp_vel += (dv / dv_norm) * max_dv;
-	} else {
-		_sp_vel = v_des;
-	}
+	// 5. Takip Hız Setpointi (Trajectory Velocity Setpoint)
+	_sp_vel(2) = v_v(2);
+	_sp_vel_initialized = true;
 
 	// -------------------------------------------------------------------------
 	// D. Yaw Setpoint: Gövde burnu hedefin anlık gidiş vektörüne kilitlenir
@@ -375,7 +388,9 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 		}
 
 	} else if (!_net_fired) {
-		_firing_counter = 0;
+		if (_firing_counter > 0) {
+			_firing_counter--;
+		}
 	}
 }
 
@@ -500,15 +515,16 @@ void Intercept::Run()
 			// Feedforward acceleration + smooth pursuit velocity setpoint
 			trajectory_setpoint_s sp{};
 			sp.timestamp = now;
+			// Altitude locked firmly to target basket height across all phases (rejects aerodynamic wing lift)
 			sp.position[0] = NAN;
 			sp.position[1] = NAN;
-			sp.position[2] = NAN;
+			sp.position[2] = _p_v(2);
 			sp.acceleration[0] = a_cmd(0);
 			sp.acceleration[1] = a_cmd(1);
-			sp.acceleration[2] = a_cmd(2);
+			sp.acceleration[2] = _target_accel(2);
 			sp.velocity[0] = _sp_vel(0);
 			sp.velocity[1] = _sp_vel(1);
-			sp.velocity[2] = _sp_vel(2);
+			sp.velocity[2] = _v_v(2);
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;
 			_trajectory_setpoint_pub.publish(sp);
@@ -570,6 +586,15 @@ int Intercept::print_status()
 	default: phase_str = "STANDBY"; break;
 	}
 	PX4_INFO("Guidance Phase: %s", phase_str);
+
+	const char *src_str = "NONE";
+	switch (_target_source) {
+	case TargetSource::GPS_FOLLOW_TARGET: src_str = "GPS (follow_target)"; break;
+	case TargetSource::VISION:            src_str = "VISION (target_detection)"; break;
+	case TargetSource::DEAD_RECKONING:    src_str = "DEAD_RECKONING (kinematic extrapolation)"; break;
+	default:                              src_str = "NONE"; break;
+	}
+	PX4_INFO("Target Source: %s, Fix Valid: %s", src_str, _target_pos_valid ? "YES" : "NO");
 
 	if (_target_pos_valid) {
 		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);

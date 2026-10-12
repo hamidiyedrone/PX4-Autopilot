@@ -47,8 +47,8 @@ param set-default SIM_GZ_EC_FUNC4 104
 param set-default SIM_GZ_EC_MIN4 150
 param set-default SIM_GZ_EC_MAX4 2208
 
-param set-default THR_MDL_FAC 0.3
-param set-default MPC_THR_HOVER 0.53
+param set-default THR_MDL_FAC 0.0
+param set-default MPC_THR_HOVER 0.24
 
 # nose camera on the thrust axis
 param set-default TGV_MNT_PITCH 90

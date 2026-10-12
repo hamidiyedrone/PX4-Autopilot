@@ -37,6 +37,9 @@ bool GZGimbal::init(const std::string &world_name, const std::string &model_name
 	const std::string seeker_yaw_topic = "/model/" + model_name + "/command/seeker_yaw";
 	_seeker_yaw_cmd_publisher = _node.Advertise<gz::msgs::Double>(seeker_yaw_topic);
 
+	const std::string launcher_pitch_topic = "/model/" + model_name + "/command/net_launcher_pitch";
+	_launcher_pitch_cmd_publisher = _node.Advertise<gz::msgs::Double>(launcher_pitch_topic);
+
 	const std::string gimbal_imu_topic = "/world/" + world_name + "/model/" + model_name +
 					     "/link/camera_link/sensor/camera_imu/imu";
 
@@ -62,7 +65,7 @@ bool GZGimbal::init(const std::string &world_name, const std::string &model_name
 
 	updateParameters();
 
-	ScheduleOnInterval(200_ms); // @5Hz
+	ScheduleOnInterval(20_ms); // @50Hz smooth high-rate gimbal tracking
 
 	// Schedule on vehicle command messages
 	if (!_vehicle_command_sub.registerCallback()) {
@@ -88,20 +91,40 @@ void GZGimbal::Run()
 				    dt);
 		publishJointCommand(_gimbal_yaw_cmd_publisher, _yaw_stp, _yaw_rate_stp, _last_yaw_stp, _yaw_min, _yaw_max, dt);
 
+		// Transform from PX4 FRD body angles to Gazebo model FLU joint coordinates:
+		// Gazebo roll axis: +X Forward (same sign)
+		// Gazebo pitch axis: +Y Left (opposite of FRD Right) -> negate
+		// Gazebo yaw axis: +Z Up (opposite of FRD Down) -> negate
+		const float roll_gz = _last_roll_stp;
+		const float pitch_gz = -_last_pitch_stp;
+		const float yaw_gz = -_last_yaw_stp;
+
 		if (_seeker_roll_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_r;
-			msg_r.set_data(_last_roll_stp);
+			msg_r.set_data(roll_gz);
 			_seeker_roll_cmd_publisher.Publish(msg_r);
 		}
 		if (_seeker_pitch_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_p;
-			msg_p.set_data(_last_pitch_stp);
+			msg_p.set_data(pitch_gz);
 			_seeker_pitch_cmd_publisher.Publish(msg_p);
 		}
 		if (_seeker_yaw_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_y;
-			msg_y.set_data(_last_yaw_stp);
+			msg_y.set_data(yaw_gz);
 			_seeker_yaw_cmd_publisher.Publish(msg_y);
+		}
+
+		// MITLA 2.0 net launcher barrel elevation:
+		// Barrel joint in Gazebo is axis 0 -1 0 (-Y, Right).
+		// 0 rad = vertical (+Z, 90 deg up from horizontal).
+		// M_PI_2 rad = horizontal forward along +X.
+		// When tracking target, barrel aims along target elevation line-of-sight in body frame:
+		if (_launcher_pitch_cmd_publisher.Valid()) {
+			gz::msgs::Double msg_l;
+			const float barrel_pitch = math::constrain(M_PI_2_F - pitch_gz, 0.0f, M_PI_2_F + 0.1745f);
+			msg_l.set_data(barrel_pitch);
+			_launcher_pitch_cmd_publisher.Publish(msg_l);
 		}
 	}
 

@@ -233,20 +233,25 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = ("127.0.0.1", a.port)
 
-    # 2-axis gimbal setup
+    # 2-axis/3-axis gimbal command subscriber (autopilot PX4 GZGimbal has exclusive joint control)
     gimbal_cfg = cfg.get("gimbal", {})
     gimbal_enabled = gimbal_cfg.get("enabled", False)
+    gmb_angles = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+
+    def on_gmb_yaw(msg):
+        gmb_angles["yaw"] = msg.data
+
+    def on_gmb_pitch(msg):
+        gmb_angles["pitch"] = msg.data
+
+    def on_gmb_roll(msg):
+        gmb_angles["roll"] = msg.data
+
     if gimbal_enabled:
-        pub_gimbal_yaw = node.advertise(f"/model/{a.interceptor}/command/seeker_yaw", Double)
-        pub_gimbal_pitch = node.advertise(f"/model/{a.interceptor}/command/seeker_pitch", Double)
-        yaw_limit = math.radians(gimbal_cfg.get("yaw_limit_deg", 45))
-        pitch_limit = math.radians(gimbal_cfg.get("pitch_limit_deg", 45))
-        print(f"sim_detector: 2-axis seeker gimbal active (+/-{math.degrees(yaw_limit):.0f}° yaw, "
-              f"+/-{math.degrees(pitch_limit):.0f}° pitch)")
-    else:
-        pub_gimbal_yaw = None
-        pub_gimbal_pitch = None
-        yaw_limit = pitch_limit = 0.0
+        node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_yaw", on_gmb_yaw)
+        node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
+        node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_roll", on_gmb_roll)
+        print(f"sim_detector: subscribed to autopilot seeker gimbal commands (no joint conflicts)")
 
     pub_detection = node.advertise(f"/model/{a.interceptor}/detection", Double_V)
 
@@ -315,46 +320,28 @@ def main():
         d_tgt_body = R_int.T @ d_tgt_world  # FLU (+x fwd, +y left, +z up nose)
         dist_tgt = float(np.linalg.norm(d_tgt_body))
 
-        # Kinematic Seeker Gimbal: Pitch-Only Active Tracking (Yaw locked to 0 boresight)
-        if gimbal_enabled and pub_gimbal_yaw is not None and pub_gimbal_pitch is not None:
-            # 1. Yaw axis locked firmly to 0 boresight (azimuth handled by drone heading)
-            gmb_psi = 0.0
-            msg_y = Double()
-            msg_y.data = 0.0
-            pub_gimbal_yaw.publish(msg_y)
-
-            # 2. Pitch axis active tracking: points camera optical axis directly at target in body elevation plane
-            if dist_tgt > 0.5:
-                theta_desired = float(np.clip(math.atan2(d_tgt_body[0], d_tgt_body[2]), -pitch_limit, pitch_limit))
-            else:
-                # Target lost: smoothly return to neutral 0 boresight
-                theta_desired = 0.0
-
-            # Enforce physical maximum angular velocity (slew-rate limiter <= 90 deg/s)
-            max_delta = max_rate_rad * dt_step
-            d_theta = float(np.clip(theta_desired - gmb_theta, -max_delta, max_delta))
-
-            # Exponential low-pass smoothing (critically damped servo response, tau ~ 0.06s)
-            alpha = 1.0 - math.exp(-dt_step / 0.06)
-            gmb_theta += d_theta * (0.4 + 0.6 * alpha)
-
-            msg_p = Double()
-            msg_p.data = gmb_theta
-            pub_gimbal_pitch.publish(msg_p)
-
-        # camera pose in world (strictly at drone nose, oriented by pitch gimbal angle)
-        p_cam_world = p_nose_world
-
-        if gimbal_enabled:
+        # Camera pose in world: determined by physical gimbal link or commanded angles
+        p_gmb = state["poses"].get("gimbal_pitch_link")
+        if gimbal_enabled and p_gmb is not None:
+            R_cam = quat_to_rot(p_gmb.orientation.w, p_gmb.orientation.x,
+                                p_gmb.orientation.y, p_gmb.orientation.z)
+            p_cam_world = np.array([p_gmb.position.x, p_gmb.position.y, p_gmb.position.z])
+        elif gimbal_enabled:
+            # Reconstruct from commanded joint angles in body FLU
+            gmb_psi = gmb_angles.get("yaw", 0.0)
+            gmb_theta = gmb_angles.get("pitch", 0.0)
             cp, sp = math.cos(gmb_theta), math.sin(gmb_theta)
+            cy, sy = math.cos(gmb_psi), math.sin(gmb_psi)
             R_rel = np.array([
-                [ cp,  0.,  sp],
-                [ 0.,  1.,  0.],
-                [-sp,  0.,  cp]
+                [ cy * cp, -sy,  cy * sp],
+                [ sy * cp,  cy,  sy * sp],
+                [    -sp,   0.,      cp ]
             ])
             R_cam = R_int @ R_rel
+            p_cam_world = p_nose_world
         else:
             R_cam = R_int
+            p_cam_world = p_nose_world
 
         # target relative to camera, in gz-camera frame
         d_world = p_tgt - p_cam_world

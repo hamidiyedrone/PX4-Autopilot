@@ -56,6 +56,7 @@ private:
 	gz::transport::Node::Publisher _seeker_roll_cmd_publisher;
 	gz::transport::Node::Publisher _seeker_pitch_cmd_publisher;
 	gz::transport::Node::Publisher _seeker_yaw_cmd_publisher;
+	gz::transport::Node::Publisher _launcher_pitch_cmd_publisher;
 
 	float _roll_stp = NAN;
 	float _pitch_stp = NAN;
