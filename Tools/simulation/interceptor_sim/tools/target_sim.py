@@ -439,7 +439,7 @@ def main():
 	ap.add_argument("--world", default="ankara")
 	ap.add_argument("--model", default="talon1718_1")
 	ap.add_argument("--alt", type=float, default=100.0, help="circuit altitude above the runway [m]")
-	ap.add_argument("--speed", type=float, default=25.0, help="[m/s]")
+	ap.add_argument("--speed", type=float, default=28.0, help="[m/s]")
 	ap.add_argument("--side", type=float, default=2000.0, help="square side [m]")
 	ap.add_argument("--bank", type=float, default=35.0, help="bank angle in the corners [deg]")
 	ap.add_argument("--accel", type=float, default=4.0, help="take-off acceleration [m/s^2]")

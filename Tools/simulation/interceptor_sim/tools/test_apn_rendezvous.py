@@ -428,7 +428,7 @@ def main():
     parser.add_argument("--gui", "--view", dest="gui", action="store_true", help="Gazebo 3D arayüzü ve Kamera HUD penceresini açar")
     parser.add_argument("--pattern", choices=["square", "weave"], default=os.environ.get("PATTERN", "square"),
                         help="Talon uçuş rotası: 'square' (kare rota, keskin virajlar) veya 'weave' (S-çizen yılan kaçış manevrası)")
-    parser.add_argument("--speed", type=float, default=18.0, help="Talon uçuş hızı [m/s] (varsayılan: 18)")
+    parser.add_argument("--speed", type=float, default=28.0, help="Talon uçuş hızı [m/s] (varsayılan: 28)")
     parser.add_argument("--alt", type=float, default=70.0, help="Talon uçuş irtifası [m] (varsayılan: 70)")
     parser.add_argument("--side", type=float, default=3000.0, help="Kare rota kenar uzunluğu [m]")
     parser.add_argument("--weave-amp", type=float, default=30.0, help="S-manevrası sağ-sol kaçış genliği [m] (örn: 25, 40, 50)")

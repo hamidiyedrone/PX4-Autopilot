@@ -1,264 +1,211 @@
 # Otonom Önleme Koşu Testleri, Telemetri Analizi ve Güdüm Tuning Kılavuzu (kosu_test.md)
 
-Bu doküman; **Ukrayna Octopus / Vakkas VTOL Tailsitter Önleyici Dronun**, kaçınma manevraları yapan **Talon-1718 hedef İHA'sına** karşı gerçekleştireceği simülasyon koşularını, yüksek frekanslı telemetri loglama sistemini, uçuş verisi analiz yöntemlerini ve **APN (Augmented Proportional Navigation)** ile **IBVS (Image-Based Visual Servoing)** güdüm algoritmalarının tuning / revizyon kurallarını tanımlar.
+Bu doküman; **Ukrayna Octopus / Vakkas VTOL Tailsitter Önleyici Dronun**, yüksek hızda (temel hız **28 m/s**, dinamik aralık **22 - 34 m/s**) uçan ve kaçınma manevraları yapan **Talon-1718 hedef İHA'sına** karşı gerçekleştireceği **25 kapsamlı otonom test koşusunu**, 50 Hz çok kanallı senkronize telemetri loglama sistemini, uçuş verisi analiz yöntemlerini ve **3D Blended APN (Augmented Proportional Navigation)** ile **IBVS (Image-Based Visual Servoing)** güdüm algoritmalarının tuning / revizyon kurallarını tanımlar.
 
 > [!NOTE]
-> Bu doküman hem insan mühendisler hem de yapay zeka ajanları (AI Coding / Flight Test Agents) tarafından doğrudan okunup uçtan uca otomatik test koşuları koşturulabilecek şekilde hazırlanmıştır.
+> Bu doküman ve beraberindeki `batch_run_25.py` test paketi; insan mühendisler ve yapay zeka ajanları (AI Flight Test Agents) tarafından 10+ saatlik gözetimsiz / otonom test koşturabilecek, sonuçları otomatik özetleyip raporlayabilecek şekilde yapılandırılmıştır.
 
 ---
 
 ## 1. Test Mimarisi ve Simülasyon Altyapısı
 
-Önleme simülasyonu, donanım ve yazılım katmanlarını aşağıdaki bileşenlerle koşturur:
-- **PX4 Autopilot (SITL):** Önleyici dronun uçuş kontrolcüsü (`bin/px4`), navigasyon, durum kestirimi ve `src/modules/intercept` otonom önleme modülü.
-- **Gazebo Harmonic (GZ):** Fiziksel dünya, aerodinamik kuvvetler, Storm32 3-eksenli gimbal, burun kamerası (`nose_camera`) ve MITLA 2.0 ağ fırlatıcı canister'ı (`net_launcher`).
-- **target_sim.py:** Talon-1718 kinematik hedef motoru. Dinamik manevra rotaları (weave, square, break turn, climb/dive) üretir, PX4'e ADS-B ve HTTP üzerinden durum yayınlar.
-- **sim_detector.py & view_hud.py:** Gerçek zamanlı optik hedef tespit simülatörü ve HUD video arayüzü (50/80 FPS dinamik kamera modeli, 3D STL mesh projeksiyonu).
+Önleme simülasyonu aşağıdaki bileşenlerle eşzamanlı çalışır:
+- **PX4 Autopilot (SITL):** Önleyici dronun uçuş kontrolcüsü (`bin/px4`), durum kestirimi ve `src/modules/intercept` otonom önleme modülü.
+- **Gazebo Harmonic (GZ):** Fiziksel simülasyon dünyası, aerodinamik kuvvetler, Storm32 3-eksenli gimbal, burun kamerası (`nose_camera`) ve MITLA 2.0 ağ fırlatıcı canister'ı (`net_launcher`).
+- **target_sim.py:** Talon-1718 kinematik hedef motoru. Temel hız 28 m/s olmak üzere 22-34 m/s aralığında dinamik gaz dalgalanmaları, weave, break turn, dalış ve tırmanış manevraları üretir.
+- **sim_detector.py & view_hud.py:** 50/80 FPS dinamik kamera modeli, optik 3D STL mesh projeksiyonu ve HUD arayüzü.
 - **ground_relay.py:** Yer istasyonu hedef takip rölesi (MAVLink `FOLLOW_TARGET`).
-- **Telemetry Recorder:** 50 Hz çok kanallı senkronize telemetri kayıtçısı (`CSV` ve `JSONL` çıktıları).
+- **batch_run_25.py:** 25 koşuyu gözetimsiz sırayla koşturan, 50 Hz telemetri kaydeden ve otomatik rapor üreten master test suite'i.
 
 ---
 
-## 2. Hedef (Talon-1718) Manevra Tipleri ve Koşu Matrisi
+## 2. Hedef (Talon-1718) 25-Koşuluk Kapsamlı Manevra Test Matrisi
 
-Güdüm algoritmasını sağlamlaştırmak için Talon hedefine aşağıdaki 6 standart manevra profili koşturulmalıdır:
+Hedef uçağın temel seyir hızı **28.0 m/s** (~101 km/h) olarak belirlenmiştir. Dronumuz azami 45 m/s hıza kadar ivmelenebilmekte olup, 28 m/s kaçan hedefe 35-40 m/s sprint ile yaklaşıp sepet mesafesinde (2.5m arkada) hız eşitleme yapar.
 
-| Koşu ID | Manevra Adı | Profil Açıklaması | Test Edilen Güdüm Kabiliyeti | Başarı Kriteri |
-| :--- | :--- | :--- | :--- | :--- |
-| **RUN-01** | **Baseline Straight** | 22 m/s düz ve yatay uçuş, irtifa 60m. | Uzak fazdan yaklaşma, sanal sepete oturma ve ağ atım zarfı. | Hedefin 2.5m arkasına oturma ($R_v \le 2.2m$), Ağ Atışı |
-| **RUN-02** | **Sinusoidal Weave (S-Dönüşü)** | $\pm 30^\circ$ bank açısı, frekans: 0.3 Hz, genlik: 35 m, hız: 22 m/s. | Görüş hattı açısal hızı ($\dot{\lambda}$) takibi, yanal APN tepkisi ve kuyruk sallama (fishtailing) sönümleme. | Yanal sapma $< 1.5m$, LOS hız doyumsuz takip |
-| **RUN-03** | **High-G Break Turn** | $40^\circ - 45^\circ$ sert ani bank dönüşü, hız: 26 m/s. | Gimbal açısal hız limiti (90°/s), kamera FOV sınırında hedefi tutma, hedef merkezkaç ivmesi telafisi. | Görüş hattı kaybı (Loss of Lock) yaşanmaması |
-| **RUN-04** | **Vertical Jink (Dalış & Tırmanış)** | 25m ani dikey dalış, ardından 30m dik tırmanış ($V_z \approx \pm 6$ m/s). | Önleyici dronun tilt/pitch açısı ile irtifa kontrolü ayrışması; dikey eksen APN katsayısı. | İrtifa hatası $< 2.0m$, aşırı dalış/çakılma olmaması |
-| **RUN-05** | **Speed Jink (Hız Değişimi)** | 14 m/s'den aniden 28 m/s'ye ivmelenme ve ardından motor kesme. | Kapanma hızı ($V_c$) regülasyonu, aşırı boyuna frenleme klamplaması (pitch flip önleme). | Geriye takla atmama, $V_c \in [1, 4]$ m/s yakalama |
-| **RUN-06** | **Compound 3D Evasion** | Spiral dalış + S-dönüşü + ani tırmanış kombinasyonu (Tam kaçış). | Karmaşık 3D yörünge takip stabilitesi, Blended APN ve IBVS nihai performans testi. | Hedef sepetine $< 3.0m$ yaklaşma, ağ atımı |
+Aşağıdaki 25 senaryo 6 ana taktik grupta toplanmıştır:
+
+### Grup A: Yüksek Hızlı Düz Takip & Gaz Dalgalanması (Speed Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-01** | Baseline 28 m/s Level Pursuit | 28.0 | 60 | Düz ve yatay uçuş, sabit 28 m/s. | Temel yaklaşma, sanal sepete oturma ve ağ atımı. |
+| **RUN-02** | Fast Sprint 32 m/s Pursuit | 32.0 | 80 | Yüksek hızlı düz kaçış (32 m/s). | İleri itki marjı, azami hızda sepet mesafesini koruma. |
+| **RUN-03** | Low-Speed 24 m/s Pursuit | 24.0 | 50 | Alt hız sınırı düz takip (24 m/s). | Düşük hızda gövde pitch açısı ve sepet stabilitesi. |
+| **RUN-04** | Periodic Throttle Pulse | 28.0 (24-32) | 65 | 24 m/s ile 32 m/s arası periyodik gaz darbeleri. | Dinamik kapanma hızı ($V_c$) regülasyonu. |
+
+### Grup B: Kaçınma S-Dönüşleri & Yılan Dalgaları (Weave Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-05** | Mild Weave at 28 m/s | 28.0 | 60 | Genlik: 20m, Dalga boyu: 450m (~15° bank). | Görüş hattı açısal hızı ($\dot{\lambda}$) hassas takibi. |
+| **RUN-06** | Standard Tactical Weave | 28.0 | 65 | Genlik: 35m, Dalga boyu: 380m (~28° bank). | Yanal APN ivmesi ve sepet yanal sapma hatası. |
+| **RUN-07** | Aggressive S-Turn Weave | 28.0 | 70 | Genlik: 50m, Dalga boyu: 300m (~38° bank). | Kuyruk sallama (fishtailing) sönümleme ve $R_{core}$ etkisi. |
+| **RUN-08** | Fast Weave Sprint | 32.0 | 80 | Genlik: 35m, Hız: 32 m/s yüksek hızlı dalga. | Yüksek süratte viraj dışına savrulmama (N katsayısı). |
+
+### Grup C: Sert Yüksek-G Kırılma Dönüşleri (Turn Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-09** | Coordinated Orbit Left | 28.0 | 70 | Sola sürekli koordineli daire (30° bank). | Sabit yanal merkezkaç ivmesi altında sepet takibi. |
+| **RUN-10** | High-G Break Turn Right | 28.0 | 60 | Sağa ani sert kırılma (45° bank, 0.55 rad/s). | Gimbal açısal hız sınırı (90°/s) ve FOV kaçırma kontrolü. |
+| **RUN-11** | Fast Break Turn Left | 32.0 | 80 | 32 m/s hızda sert sola kırılma (45° bank). | Yüksek hızda merkezkaç ivmesi feedforward telafisi. |
+| **RUN-12** | Break Turn with Speed Drop | 28 -> 20 | 65 | Dönüşün ortasında aniden 20 m/s'ye hava freni. | Dönüş içi ani bağıl hız değişimi ve fren klamplaması. |
+
+### Grup D: Dikey Kaçışlar & Eğim Dinamiği (Vertical Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-13** | Shallow Dive Evasion | 28.0 | 75 -> 45 | Sığ dikey dalış ($V_z = -3$ m/s, 28 m/s). | Eğimli uçuşta irtifa kaybına APN dikey tepkisi. |
+| **RUN-14** | Steep Dive Evasion | 28.0 | 90 -> 35 | Dik dikey dalış ($V_z = -6$ m/s, 28 m/s). | Hızlı dalışta zemin emniyeti ve aşırı dalma önleme. |
+| **RUN-15** | Zoom Climb Evasion | 28.0 | 50 -> 110 | Dik tırmanış ($V_z = +6$ m/s, 28 m/s). | Dikey eksen tırmanış APN kazancı ve itki payı. |
+| **RUN-16** | Vertical Rollercoaster | 28.0 | 70 | Önce 40m'ye dalış, ardından 95m'ye dik tırmanış. | Dikey yönde yön değiştirme ve pitch salınım kontrolü. |
+
+### Grup E: Gaz Tuzakları & Hız Şokları (Throttle Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-17** | Hard Airbrake Trap | 28 -> 16 | 60 | Hedefe 15m kala aniden 16 m/s'ye motor kesme. | Geriye takla atmama (pitch-up snap clamp: max -4.5 m/s²). |
+| **RUN-18** | Sprint Escape | 24 -> 34 | 65 | Hedefe 20m kala aniden 34 m/s tam gaz kaçış. | Maksimum ivme doyumu (`INT_ACC_MAX`) ve takip payı. |
+| **RUN-19** | Cyclic Speed Jitter | 28 (23-33) | 60 | Her 10 saniyede bir $\pm 5$ m/s ani gaz adımları. | Kapanma hızı ivme türevi regülasyonu. |
+| **RUN-20** | Decel & Re-accel Pulse | 28 -> 18 -> 32 | 65 | Hedef yavaşlayıp sepete çekerken aniden gaz açma. | Sepet oturma PID integral rüzgarı (anti-windup). |
+
+### Grup F: Bileşik 3D Muharebe Kaçınma Manevraları (Combat Group)
+| Koşu ID | Senaryo Adı | Talon Hızı [m/s] | İrtifa [m] | Profil Açıklaması | Test Edilen Kabiliyet |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| **RUN-21** | Spiral Dive Combat Evasion | 28.0 | 85 -> 40 | 35° bank dönüşüyle birlikte -5 m/s dalış. | 3D bileşik açısal hız altında sürekli kilitlenme. |
+| **RUN-22** | Climbing S-Turn Evasion | 28.0 | 55 -> 110 | 35m genlikli S-dönüşü yaparken +5 m/s tırmanış. | Yatay + dikey bileşik APN güdüm performansı. |
+| **RUN-23** | Evasive Reversals + Speed Drop | 28 -> 22 | 65 | Sola 40° sert dönüş, ardından Sağa 40° kırılma. | Tersine çevrimlerde gimbal ve gövde yönelim gecikmesi. |
+| **RUN-24** | 3D Corkscrew Jink | 28 (25-32) | 55 -> 105 | Tirbüşon manevrası (Spiral tırmanış + gaz dalgası). | Çoklu serbestlik dereceli ekstrem takip. |
+| **RUN-25** | Full Combat Evasion Gauntlet | 28 - 34 | 75 | Break Turn -> Spiral Dalış -> Zoom Climb zinciri. | Nihai stres ve yakalama dayanıklılık testi. |
 
 ---
 
-## 3. Koşuların Çalıştırılma Prosedürü
+## 3. Otomatik Çalıştırma ve Koşu Seçenekleri
 
-### 3.1. Manuel / Görsel Koşu Başlatma (Geliştirici İncelemesi İçin)
-Gazebo GUI ve HUD kamera penceresiyle birlikte çalıştırmak için:
+### 3.1. 25 Koşunun Tamamını Gözetimsiz Başlatma (10+ Saatlik Test)
+Aşağıdaki tek komutla tüm 25 koşu art arda koşturulur, her birinin telemetrisi diske yazılır ve özet rapor otomatik üretilir:
 ```bash
 cd /home/kayra/Masaüstü/vakkas/PX4-Autopilot
 
-# Standart Düz Uçuş
-./Tools/simulation/interceptor_sim/sim.sh
-
-# Belirli bir manevra tipiyle çalıştırma (örn: S-dönüşü kaçınma)
-PATTERN=weave SPEED=24 ALT=70 ./Tools/simulation/interceptor_sim/sim.sh
+# 25 koşunun tamamını çalıştır:
+python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --all
 ```
 
-### 3.2. Otomatik Başlatma, Telemetri Kaydı ve Değerlendirme (AI / Otomasyon İçin)
-Herhangi bir GUI açmadan, tam senkronize 50 Hz telemetri kaydederek manevra değerlendirmesi yapmak için:
+### 3.2. Belirli Bir Koşuyu veya Aralığı Çalıştırma
 ```bash
-cd /home/kayra/Masaüstü/vakkas/PX4-Autopilot
+# Sadece 7. koşuyu koştur (Aggressive S-Turn):
+python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --run 7
 
-# Tam otomatik 5-Aşamalı Manevra Değerlendirme Koşusu (0 - 90s)
-python3 Tools/simulation/interceptor_sim/tools/run_maneuver_evaluation.py \
-    --duration 90 \
-    --target-speed 22.0 \
-    --target-alt 60.0
+# Belirli bir aralığı koştur (örn: 1'den 5'e kadar):
+python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --range 1-5
 
-# 3D Blended APN + Ağ Atma Yakalama Koşusu
-python3 Tools/simulation/interceptor_sim/tools/test_apn_rendezvous.py
+# Belirli bir grubu koştur (örn: sadece dikey dalış/tırmanış grubu):
+python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --group vertical
 ```
 
-### 3.3. Koşu Sırasında Dinamik Manevra Enjeksiyonu (HTTP REST API)
-Koşu devam ederken hedef uçağa dışarıdan anlık kaçış komutu yollamak için `target_sim` HTTP arayüzü kullanılır:
+### 3.3. GUI ve HUD Ekranı ile Manuel İnceleme
+Herhangi bir koşuyu görsel olarak ekranda izlemek için:
 ```bash
-# 1. Weave (S-Dönüşü) moduna geçir:
-curl -X POST http://localhost:8000/cmd -H "Content-Type: application/json" \
-     -d '{"mode": "weave", "speed": 24.0, "alt": 60.0}'
-
-# 2. Sert Dönüş (High-G Turn) yaptır:
-curl -X POST http://localhost:8000/cmd -H "Content-Type: application/json" \
-     -d '{"mode": "circle", "turn_rate": 0.4, "speed": 26.0}'
-
-# 3. Ani Dikey Dalış (Dive):
-curl -X POST http://localhost:8000/cmd -H "Content-Type: application/json" \
-     -d '{"mode": "dive", "alt": 35.0, "speed": 25.0}'
+# 28 m/s standart hızda S-dönüşü görsel simülasyonu:
+PATTERN=weave SPEED=28 ALT=65 ./Tools/simulation/interceptor_sim/sim.sh
 ```
 
 ---
 
-## 4. Loglanması Zorunlu Veriler (50 Hz Telemetri Veri Sözlüğü)
+## 4. 50 Hz Telemetri Kaydı ve Veri Şeması
 
-Otomasyon koşturulduğunda `Tools/simulation/interceptor_sim/build/telemetry/` klasörüne `YYYYMMDD_HHMMSS_flight_telemetry.csv` dosyası yazılır. Aşağıdaki sinyaller eksiksiz bulunmalıdır:
+Her koşuda `Tools/simulation/interceptor_sim/build/telemetry/run_XX_<group>.csv` dosyası üretilir.
 
-### A. Zaman ve Kinematik Durumlar (World / NED Çerçevesi)
-- `t_sim`: Simülasyon zamanı [saniye].
-- `int_pos_x`, `int_pos_y`, `int_pos_z`: Önleyici Dron pozisyonu (NED) [m].
-- `int_vel_x`, `int_vel_y`, `int_vel_z`: Önleyici Dron hız vektörü (NED) [m/s].
-- `int_acc_x`, `int_acc_y`, `int_acc_z`: Önleyici Dron ivmesi (NED) [m/s²].
-- `int_roll`, `int_pitch`, `int_yaw`: Önleyici Dron yönelim açıları (Euler ZYX) [derece].
-- `int_tilt`: Dikey eksenden gövde sapma (tilt) açısı [derece] ($= \arccos(R_{33})$).
-
-### B. Hedef Kinematiği (Talon 1718)
-- `tgt_pos_x`, `tgt_pos_y`, `tgt_pos_z`: Hedef pozisyonu (NED) [m].
-- `tgt_vel_x`, `tgt_vel_y`, `tgt_vel_z`: Hedef hız vektörü (NED) [m/s].
-- `tgt_acc_x`, `tgt_acc_y`, `tgt_acc_z`: Hedef ivme vektörü (NED) [m/s²].
-- `tgt_roll`, `tgt_pitch`, `tgt_yaw`: Hedef oryantasyonu [derece].
-
-### C. Bağıl Geometri ve Güdüm Büyüklükleri
-- `R_target`: Hedef ile önleyici arasındaki mesafe ($|\mathbf{r}_t|$) [m].
-- `R_basket`: Sanal sepet noktası mesafesi ($R_v = |\mathbf{p}_v - \mathbf{p}_{int}|$) [m].
-- `V_closing`: Kapanma hızı ($V_c = -\dot{R}$) [m/s].
-- `los_azimuth`, `los_elevation`: Görüş hattı açıları [derece].
-- `los_rate_az`, `los_rate_el`: Görüş hattı açısal hızları ($\dot{\lambda}_{az}, \dot{\lambda}_{el}$) [deg/s].
-
-### D. Güdüm Komutları ve Aktüatör Durumları
-- `cmd_acc_x`, `cmd_acc_y`, `cmd_acc_z`: Güdüm modülünden PX4'e iletilen ivme komutu [m/s²].
-- `cmd_yaw`: Burun hedefleme komutu [derece].
-- `gmb_cmd_yaw`, `gmb_cmd_pitch`: Seeker gimbal açı komutları [derece].
-- `gmb_act_pitch`: Gimbal gerçek pitch link açısı (Gazebo link encoder) [derece].
-- `barrel_cmd_pitch`: MITLA 2.0 namlu açı komutu [derece].
-
-### E. Optik & Kamera Durumu (IBVS & Detector)
-- `vis_detected`: Görsel temas var mı (0 veya 1).
-- `vis_cx`, `vis_cy`: Hedef merkezinin görüntüdeki piksel koordinatı (normalize [0, 1]).
-- `vis_w`, `vis_h`: Bounding Box genişlik ve yüksekliği (normalize [0, 1]).
-- `vis_area`: Bounding box piksel alanı ($w \times h$).
-
-### F. Karar Mekanizması ve Durum Bayrakları
-- `guidance_phase`: 0: STANDBY, 1: APN_CRUISE, 2: BLENDING, 3: RENDEZVOUS, 4: NET_FIRED.
-- `target_source`: GPS_FOLLOW_TARGET, VISION, DEAD_RECKONING.
-- `envelope_counter`: Ateşleme penceresi doğrulama sayacı (0 ile 8 arası).
-- `net_fired`: Ağ fırlatıldı mı (0 veya 1).
+### Kaydedilen Değişkenler:
+1. `sim_time`: Simülasyon zamanı [saniye].
+2. `phase`: Güdüm fazı (`STANDBY`, `APN_CRUISE`, `BLENDING`, `RENDEZVOUS`, `NET_FIRED`).
+3. `target_source`: Hedef veri kaynağı (`GPS_FOLLOW_TARGET`, `VISION`, `DEAD_RECKONING`).
+4. `int_pos_n`, `int_pos_e`, `int_pos_d`: Önleyici NED konumu [m].
+5. `int_vel_n`, `int_vel_e`, `int_vel_d`: Önleyici NED hız vektörü [m/s].
+6. `int_pitch_deg`, `int_tilt_deg`: Gövde pitch ve dikeyden toplam eğim açısı [derece].
+7. `tgt_pos_n`, `tgt_pos_e`, `tgt_pos_d`: Hedef NED konumu [m].
+8. `tgt_speed`: Hedef skaler hızı [m/s].
+9. `basket_dist_rv`: Sanal sepete olan anlık mesafe $R_v$ [m].
+10. `target_dist_rt`: Hedefe olan anlık mesafe $R_t$ [m].
+11. `closing_speed_vc`: Anlık kapanma hızı $V_c = -\dot{R}$ [m/s].
+12. `cmd_acc_norm`: Güdüm modülünden PX4'e gönderilen ivme normu [m/s²].
+13. `cmd_gmb_pitch_deg`, `cmd_gmb_yaw_deg`: Seeker gimbal açı komutları [derece].
+14. `net_fired`: Ağ atıldı mı (0 veya 1).
 
 ---
 
-## 5. Uçuş Verisi Analiz Metodolojisi (Ne Analiz Edilmeli?)
+## 5. Uçuş Analiz Metodolojisi & Başarı Metrikleri
 
-Her uçuştan sonra elde edilen CSV logu otomatik bir analiz fonksiyonundan geçirilir. Analiz aşağıdaki 5 kritik soruya cevap vermelidir:
+Her koşu sonunda otomatik analiz fonksiyonu çalışır ve aşağıdaki metrikleri puanlar:
 
-### Metrik 1: En Yakın Geçirme Mesafesi (Miss Distance) & Sepet Takip Hatası ($R_v$)
-- Hedefin 2.5m arkasındaki sanal sepet ile önleyici arasındaki minimum mesafe nedir?
-- **Hedef:** Minimum $R_v \le 1.8$ metre olmalıdır.
-- $R_v > 3.0$ metre ise güdüm yaklaşma fazında hedefi yakalayamamıştır.
+### Metrik 1: En Yakın Sepet Mesafesi ($R_{v, min}$)
+- **Kriter:** $R_v \le 2.2$ metre. Hedefin 2.5m arkasındaki yakalama sepetine tam oturma şartıdır.
 
-### Metrik 2: Dron Gövdesi Tilt/Pitch Salınımı (Limit Cycle Tespiti)
-- İleri uçuşta dron burun aşağı yatarken ($\text{Pitch} \approx -15^\circ \dots -25^\circ$) salınım yapıyor mu?
-- **Analiz:** Uçuşun cruise/pursuit bölümünde `int_pitch` verisinin tepe-tepe genliği ($\Delta \theta_{pp}$) ve FFT spektrumu hesaplanır.
-- **Kriter:**
-  - $\Delta \theta_{pp} \le 5^\circ$ $\rightarrow$ **Mükemmel stabilite.**
-  - $5^\circ < \Delta \theta_{pp} \le 10^\circ$ $\rightarrow$ **Kabul edilebilir hafif salınım.**
-  - $\Delta \theta_{pp} > 10^\circ$ veya $0.5 - 1.5$ Hz baskın frekans $\rightarrow$ **Rezonans / Limit Cycle (Güdüm ivmesi ve uçuş kontrolcüsü çakışıyor!).**
+### Metrik 2: Gövde Pitch Salınımı & Kararlılık (Limit Cycle Kontrolü)
+- İleri uçuşta dron burun aşağı yatarken ($\text{Pitch} \approx -18^\circ \dots -28^\circ$) salınım genliği:
+- **Kriter:** Tepe-tepe salınım $\Delta \theta_{pp} \le 12^\circ$ ve yön değiştirme frekansı $\le 1.2$ Hz olmalıdır.
 
-### Metrik 3: Gimbal Kilitlenme Hassasiyeti ve Kamera Görüş Kaybı (Loss of Lock)
-- Hedef kamera çerçevesinin merkezinde ne kadar iyi tutuldu?
-- **Analiz:** Hedef merkez hatası $e_{px} = \sqrt{(c_x - 0.5)^2 + (c_y - 0.5)^2}$.
-- **Kriter:**
-  - $e_{px} < 0.15$ (Hedef görüş alanı merkez bölgesinde).
-  - Eğer $vis\_detected = 0$ süresi toplam takip süresinin $\%5$'inden fazlaysa $\rightarrow$ Gimbal slew rate yetersiz veya kazançlar düşük.
+### Metrik 3: Kapanma Hızı & Pitch-Up Snap (Geriye Takla) Önleme
+- Kapanma anında boyuna frenleme ivmesi:
+- **Kriter:** $-4.5 \text{ m/s}^2$ sınırını aşmamalıdır; araç burnunu kontrolsüzce göğe dikmemelidir.
 
-### Metrik 4: Kapanma Dinamiği ve Geriye Takla (Pitch Flip) Kontrolü
-- Hedefe arkadan yaklaşırken önleyici aşırı sert frenleme yapıp geriye dikildi mi?
-- **Analiz:** $\mathbf{a}_{cmd} \cdot \mathbf{u}_t$ (hedef gidiş yönündeki ivme bileşeni) negatif yönde ne kadar büyüyor?
-- **Kriter:** Boyuna yavaşlama $-4.5 \text{ m/s}^2$'den daha sert olmamalıdır. Dronun ani olarak burun kaldırması ($d(\text{Pitch})/dt > 40^\circ/\text{s}$) engellenmelidir.
-
-### Metrik 5: Ağ Atma Zarfı ve Yakalama Başarısı
-- Dron aşağıdaki 3 koşulu **art arda en az 8 kontrol çevrimi (yaklaşık 0.15 saniye)** sağladı mı?
-  1. Sepet mesafesi $R_v \le 2.2$ metre.
-  2. Bağıl hız $|\mathbf{v}_{int} - \mathbf{v}_{tgt}| \le 2.5$ m/s.
-  3. Yönelim paralelliği $\mathbf{u}_{fwd} \cdot \mathbf{u}_{tgt} \ge 0.95$ ($< 18^\circ$ açı farkı).
-- Sonuç: `net_fired == 1` olduysa test **BAŞARILI (CAPTURE CONFIRMED)** sayılır.
+### Metrik 4: Ağ Fırlatma Zarfı (Net Gun Deployment)
+- Aşağıdaki 3 koşul art arda 8 kontrol çevrimi (yaklaşık 0.15s) sağlanmalıdır:
+  1. $R_v \le 2.2$ m
+  2. $|\mathbf{v}_{int} - \mathbf{v}_{tgt}| \le 2.5$ m/s
+  3. Gövde burun paralelliği $\ge 0.95$ ($< 18^\circ$)
+- **Başarı:** `net_fired == 1` olması durumunda test **YAKALANDI (CAPTURE CONFIRMED)** sayılır.
 
 ---
 
-## 6. Güdüm Algoritmasını İyileştirme ve Parametre Tuning Karar Matrisi
+## 6. Güdüm Algoritmasını İyileştirme Karar Matrisi (Tuning Rehberi)
 
-Elde edilen analiz verisine göre uygulanacak tuning adımları:
-
-```mermaid
-flowchart TD
-    A["Test Koşusu Tamamlandı"] --> B{"Ağ Atıldı mı? (net_fired == 1)"}
-    B -- "Evet" --> C{"Pitch Salınımı Var mı? (Delta Pitch > 8°)"}
-    C -- "Hayır" --> D["BAŞARILI: Algoritma ve Katsayılar Optimum!"]
-    C -- "Evet" --> E["SALINIM GİDERME: Jerk Sınırını Daralt, a_long Frenlemesini Kısıtla"]
-    B -- "Hayır" --> F{"Hedefe Yaklaşılamadı mı? (R_v > 4m)"}
-    F -- "Evet" --> G["YAKLAŞMA TUNİNGİ: N Katsayısını Artır (3.8 -> 4.2), V_c_des Çarpanını Yükselt"]
-    F -- "Hayır" --> H{"Sepet Civarında Hedef Kaçtı mı?"}
-    H -- "Evet" --> I["SEPET RENDEZVOUS TUNİNGİ: K_p ve K_d Katsayılarını Ayarla, Blending Penceresini Genişlet"]
-```
-
-### Detaylı Parametre Değişiklik Tablosu:
-
-| Gözlenen Problem | Olası Kök Neden | Değiştirilecek Parametre / Dosya | Tavsiye Edilen Düzeltme |
+| Gözlenen Problem | Olası Kök Neden | İlgili Dosya & Parametre | Önerilen Düzeltme |
 | :--- | :--- | :--- | :--- |
-| **Hedef S-dönüşü yaparken önleyici viraj dışına savruluyor** | Yanal yönlendirme yetersiz, APN katsayısı düşük | `INT_APN_N` (`src/modules/intercept/module.yaml`) | `INT_APN_N` değerini `3.8`'den `4.2` veya `4.5`'e yükseltin. |
-| **Hedefe 10m kala araç burnunu yukarı dikip takla atmaya çalışıyor** | Yaklaşırken hız farkını sıfırlamak için aşırı negatif boyuna ivme isteniyor | `Intercept.cpp` (`a_long_clamped`) | `a_long_clamped = math::max(a_long, -3.5f)` (Frenlemeyi -4.5'ten -3.5 m/s² seviyesine kısıtlayın). |
-| **Araç ileri uçarken sürekli aşağı-yukarı tilt/pitch dalgalanması yapıyor** | İvme jerk limiti çok yüksek veya APN ivmesi ile pitch kontrolcüsü rezonansta | `max_jerk` (`Intercept.cpp`) veya `MC_PITCH_P` | `max_jerk` değerini `70.0f`'den `45.0f` seviyesine indirin; `INT_ACC_MAX` değerini `55.0`'dan `45.0`'a çekin. |
-| **Sepete yaklaşıyor ama tam 2.5m arkasında kalamayıp sağa-sola taşıyor** | Yakın faz Rendezvous PID oransal kazancı zayıf veya integral rüzgarı | `Intercept.cpp` (`a_cmd_rendezvous`) | Konum kazancını `6.5f` yerine `8.0f`, türev kazancını `4.2f` yerine `5.2f` yapın; integral sınırını `[-3, 3]` yapın. |
-| **Sert virajda kamera hedefi kaybediyor ($vis\_detected = 0$)** | Seeker gimbal açısal hızı yetişemiyor veya P kazancı düşük | `interceptor.yaml` (`gimbal.p_gain`) | Gimbal P kazancını `8.0`'dan `12.0`'a yükseltin, `max_rate_deg_s` değerini `120` yapın. |
+| **Virajda geride kalıyor (R_v > 3.5m)** | 28 m/s yüksek hızda APN yanal yönlendirmesi yetersiz | `INT_APN_N` (`module.yaml`) | `INT_APN_N` değerini `3.8`'den `4.2` veya `4.5`'e yükseltin. |
+| **Yüksek hızda sepet arkasında sağa-sola fishtailing yapıyor** | Görüş hattı açı hızı regularizasyon çekirdeği küçük | `Intercept.cpp` (`R_core`) | `R_v * R_v + 6.25f` yerine `R_v * R_v + 10.0f` yapın ($R_{core} = 3.16m$). |
+| **Hedef fren yapınca (RUN-17) araç geriye doğru takla atıyor** | Boyuna frenleme ivmesi çok sert | `Intercept.cpp` (`a_long_clamped`) | `math::max(a_long, -3.5f)` (Frenlemeyi -4.5'ten -3.5 m/s² seviyesine gevşetin). |
+| **Düz uçuşta burun aşağı-yukarı dalgalanıyor** | İvme jerk limiti yüksek, pitch çevrimiyle çakışıyor | `Intercept.cpp` (`max_jerk`) | `max_jerk = 70.0f` yerine `45.0f` yapın. |
+| **Sepete yaklaşıyor ama hız eşitleyemiyor** | Yakın faz Rendezvous PID türev kazancı zayıf | `Intercept.cpp` (`a_cmd_rendezvous`) | Hız farkı türev katsayısını `4.2f`'den `5.2f`'ye yükseltin. |
 
 ---
 
-## 7. IBVS (Image-Based Visual Servoing) Güdüm Entegrasyonu
+## 7. IBVS (Image-Based Visual Servoing) Entegrasyonu
 
-Görsel güdüm üzerinde çalışan mühendisin doğrudan kullanabilmesi için kamera görüntüsü tabanlı hata geri beslemesi formülasyonu:
+Görsel güdüm üzerinde çalışan ekip arkadaşınızın kamera hata vektörünü doğrudan APN ile birleştirebilmesi için formülasyon:
 
-### 7.1. Piksel Hata Vektörü
-Kamera çözünürlüğü $W \times H$ olmak üzere, hedefin optik merkez sapması:
-$$e_u = c_x - \frac{W}{2}, \quad e_v = c_y - \frac{H}{2}$$
-
-### 7.2. Bounding Box Alanı Üzerinden Kapanma Hızı Tahmini
-Hedefin piksel alanı $A(t) = w \times h$ olarak ölçüldüğünde, menzil ve kapanma hızı doğrudan görüntüden türetilir:
-$$R(t) \propto \frac{1}{\sqrt{A(t)}}, \quad V_c(t) = -\dot{R} \propto \frac{1}{2} \frac{\dot{A}(t)}{A(t)^{1.5}}$$
-
-### 7.3. IBVS Kontrol Kanunu (Interaction Matrix)
-Önleyici dronun gövde/gimbal hız komutları:
-$$\begin{bmatrix} v_y^{cam} \\ v_z^{cam} \end{bmatrix} = - \lambda_{ibvs} \begin{bmatrix} \frac{Z}{f_x} & 0 \\ 0 & \frac{Z}{f_y} \end{bmatrix} \begin{bmatrix} e_u \\ e_v \end{bmatrix}$$
-Burada hedefi optik eksende merkeze çekmek için üretilen lateral ivme komutu:
-$$\mathbf{a}_{lat}^{ibvs} = - K_p^{ibvs} \begin{bmatrix} e_u / W \\ e_v / H \end{bmatrix} - K_d^{ibvs} \begin{bmatrix} \dot{e}_u / W \\ \dot{e}_v / H \end{bmatrix}$$
-
-Bu ivme doğrudan `Intercept.cpp` içerisindeki `a_cmd_apn_lat` ile harmanlanarak GPS bağımsız terminal güdüm sağlanır.
+1. **Piksel Hata Vektörü:**
+   $$e_u = c_x - 0.5, \quad e_v = c_y - 0.5$$
+2. **Bounding Box Büyüme Hızı ile Kapanma Hızı Kestirimi:**
+   $$A = w \times h, \quad V_c \approx K_a \frac{\dot{A}}{A^{1.5}}$$
+3. **Yanal IBVS İvme Komutu:**
+   $$\mathbf{a}_{lat}^{ibvs} = - K_p^{ibvs} \begin{bmatrix} e_u \\ e_v \end{bmatrix} - K_d^{ibvs} \begin{bmatrix} \dot{e}_u \\ \dot{e}_v \end{bmatrix}$$
+Bu lateral ivme, terminal fazda (`BLENDING` ve `RENDEZVOUS`) GPS verisi kaybolduğunda doğrudan `a_cmd_rendezvous` yerine ikame edilir.
 
 ---
 
-## 8. Yapay Zekaya (AI Agent) Doğrudan Verilecek Test Prompt Şablonu
-
-Aşağıdaki metni bir yapay zeka ajanına doğrudan prompt olarak verip otomatik koşu ve optimizasyon döngüsü başlatabilirsiniz:
+## 8. Yapay Zeka Ajanına (AI Agent) Doğrudan Verilecek Görev Promptu
 
 ```text
 SİSTEM YÖNERGESİ / TEST KOŞUSU TALİMATI:
 Sen Vakkas VTOL Önleyici Dron projesinde otonom güdüm ve test mühendisisin.
 Görevin:
-1. `kosu_test.md` dosyasındaki RUN-01, RUN-02 ve RUN-03 senaryolarını sırasıyla `run_maneuver_evaluation.py` ve `test_apn_rendezvous.py` araçlarını kullanarak çalıştır.
-2. Her koşudan sonra `Tools/simulation/interceptor_sim/build/telemetry/` klasörüne üretilen en son CSV telemetri dosyasını oku.
-3. Telemetriden:
-   - Minimum sepet mesafesini (R_v_min) ve ortalama kapanma hızını (V_c_mean),
-   - Dron gövde pitch açısındaki tepe-tepe salınım genliğini (Delta_Pitch_pp) ve varsa limit cycle frekansını,
-   - Hedef tespit oranını (detection percentage) ve gimbal kilitlenme hatasını,
-   - Ağ fırlatma zarfının yakalanıp yakalanmadığını (net_fired == 1) hesapla.
-4. Elde ettiğin metrikleri `kosu_test.md` Bölüm 6'daki Karar Matrisi ile karşılaştır.
-5. Eğer salınım varsa veya hedef kaçırıldıysa, `src/modules/intercept/Intercept.cpp` veya `module.yaml` içindeki ilgili parametreleri güncelle, simülasyonu yeniden derle (`make px4_sitl_default`) ve testi tekrar koştur.
-6. Nihai sonuçları, öncesi/sonrası metriklerini ve capture anı telemetri özetini raporla.
+1. `kosu_test.md` dokümanında tanımlanan 25 koşuluk test suite'ini `python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --all` komutuyla koştur.
+2. Tüm koşular bittiğinde `Tools/simulation/interceptor_sim/build/telemetry/batch_25_summary.json` ve `batch_25_report.md` dosyalarını oku.
+3. Başarısız olan (net_fired == 0) veya pitch salınımı yüksek olan koşuları tespit et.
+4. `kosu_test.md` Bölüm 6'daki Karar Matrisine göre `src/modules/intercept/Intercept.cpp` veya `module.yaml` içindeki APN / Rendezvous parametrelerini güncelle.
+5. Kodu `make px4_sitl_default` ile derle ve başarısız olan koşuları tekrar çalıştır.
+6. Nihai başarı oranını ve parametre değişimlerini özetle.
 ```
 
 ---
 
-## 9. Hızlı Başlangıç Komut Özeti
+## 9. Hızlı Başlangıç Komutları
 
 ```bash
-# 1. Ortamı temizle ve derle
+# 1. Ortamı hazırla ve derle
 cd /home/kayra/Masaüstü/vakkas/PX4-Autopilot
 make px4_sitl_default
 
-# 2. 50 Hz telemetrili otomatik APN & Ağ Atma Koşusu
-python3 Tools/simulation/interceptor_sim/tools/test_apn_rendezvous.py
+# 2. 25 koşuluk test paketini başlat (arka planda çalıştırmak için nohup eklenebilir)
+python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --all
 
-# 3. Koşu loglarını listele
-ls -lt Tools/simulation/interceptor_sim/build/telemetry/*.csv | head -n 5
-
-# 4. Son koşunun sonuçlarını terminalde özetle
-python3 -c "
-import pandas as pd, glob, os
-files = sorted(glob.glob('Tools/simulation/interceptor_sim/build/telemetry/*.csv'), key=os.path.getmtime)
-if files:
-    df = pd.read_csv(files[-1])
-    print('Log:', files[-1])
-    print('Min Sepet Mesafesi (R_v):', df['basket_rv'].min(), 'm')
-    print('Ağ Atıldı mı:', (df['net_fired'] > 0).any())
-    print('Pitch Max-Min:', df['int_pitch'].max() - df['int_pitch'].min(), 'deg')
-"
+# 3. Canlı özet raporunu oku
+cat Tools/simulation/interceptor_sim/build/telemetry/batch_25_report.md
 ```
