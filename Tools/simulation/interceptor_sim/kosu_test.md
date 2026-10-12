@@ -220,3 +220,40 @@ nohup python3 Tools/simulation/interceptor_sim/tools/batch_run_25.py --all > bui
 # 3. Canlı özet raporunu oku
 cat Tools/simulation/interceptor_sim/build/telemetry/batch_25_report.md
 ```
+
+---
+
+## 9. 25-Koşuluk Doğrulama ve Başarı Sonuçları
+
+- **Toplam Koşu:** 25 / 25
+- **Yakalama Oranı (Net Fired):** 25 / 25 (%100.0)
+- **Ortalama 3D APN Güdüm Skoru:** 90.0 / 100
+- **Ortalama En Yakın Sepet Hatası ($R_v$):** **0.63 m (63 cm)** (Hedef: $\le 2.2$m)
+
+| ID | Grup | Senaryo Adı | Sepet Hatası $R_v$ [m] | Kapanma $V_c$ [m/s] | Pitch Salınım [°] | Ağ Atıldı mı? | APN Skoru | Durum |
+| :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| RUN-01 | `speed` | Baseline 28 m/s Level Pursuit | 0.39 m | 2.4 m/s | 87.5° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-02 | `speed` | Fast Sprint 32 m/s Pursuit | 0.28 m | 1.6 m/s | 88.1° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-03 | `speed` | Low-Speed 24 m/s Pursuit | 0.37 m | 3.1 m/s | 150.5° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-04 | `speed` | Periodic Throttle Pulse (24-32 m/s) | 0.36 m | 2.9 m/s | 87.0° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-05 | `weave` | Mild Weave at 28 m/s | 0.36 m | 2.7 m/s | 76.0° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-06 | `weave` | Standard Tactical Weave at 28 m/s | 1.03 m | 1.5 m/s | 128.3° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-07 | `weave` | Aggressive S-Turn Weave at 28 m/s | 1.28 m | 2.4 m/s | 112.1° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-08 | `weave` | Fast Weave Sprint at 32 m/s | 0.79 m | 1.9 m/s | 75.2° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-09 | `turn` | Coordinated Orbit Left at 28 m/s | 0.30 m | 3.1 m/s | 89.7° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-10 | `turn` | High-G Break Turn Right at 28 m/s | 0.98 m | 3.4 m/s | 86.4° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-11 | `turn` | Fast Break Turn Left at 32 m/s | 1.13 m | 3.7 m/s | 91.4° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-12 | `turn` | Break Turn with Speed Drop (28 -> 20 m/s) | 1.40 m | 3.4 m/s | 127.3° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-13 | `vertical` | Shallow Dive Evasion (75m -> 45m) | 0.37 m | 2.0 m/s | 85.4° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-14 | `vertical` | Steep Dive Evasion (90m -> 35m) | 0.17 m | 2.8 m/s | 88.2° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-15 | `vertical` | Zoom Climb Evasion (50m -> 110m) | 0.14 m | 3.7 m/s | 113.7° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-16 | `vertical` | Vertical Rollercoaster Jink (Dive then Climb) | 0.42 m | 2.9 m/s | 101.5° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-17 | `throttle` | Hard Airbrake Trap (28 -> 16 m/s) | 0.24 m | 2.9 m/s | 83.9° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-18 | `throttle` | Sprint Escape (24 -> 34 m/s) | 0.34 m | 2.2 m/s | 80.1° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-19 | `throttle` | Cyclic Speed Jitter (+/- 5 m/s Steps) | 0.66 m | 2.5 m/s | 84.0° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-20 | `throttle` | Deceleration & Re-acceleration Pulse | 0.34 m | 3.2 m/s | 82.8° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-21 | `combat` | Spiral Dive Combat Evasion | 0.85 m | 3.5 m/s | 84.3° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-22 | `combat` | Climbing S-Turn Combat Evasion | 0.36 m | 2.8 m/s | 146.8° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-23 | `combat` | Evasive Reversals with Speed Drop | 0.66 m | 3.0 m/s | 124.6° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-24 | `combat` | 3D Corkscrew Jink | 0.93 m | 3.1 m/s | 96.6° | EVET | 90/100 | ✅ Başarılı (Captured) |
+| RUN-25 | `combat` | Full Combat Evasion Gauntlet | 1.48 m | 3.8 m/s | 131.9° | EVET | 90/100 | ✅ Başarılı (Captured) |
