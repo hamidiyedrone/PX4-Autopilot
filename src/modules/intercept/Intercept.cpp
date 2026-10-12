@@ -264,11 +264,14 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 
 	_last_R_v = R_v;
 
+	_last_r_v = r_v;
+
 	const matrix::Vector3f u_los = r_v / math::max(R_v, 0.01f);
 	const float V_c = - (r_v.dot(v_rel)) / math::max(R_v, 0.01f);
 	_last_V_c = V_c;
 
-	const matrix::Vector3f omega_los = r_v.cross(v_rel) / math::max(R_v * R_v, 0.01f);
+	// Regularized line-of-sight angular rate (core radius R_core = 2.5m prevents close-range singularity & fishtailing)
+	const matrix::Vector3f omega_los = r_v.cross(v_rel) / math::max(R_v * R_v + 6.25f, 0.01f);
 
 	// -------------------------------------------------------------------------
 	// C. 3D Blended Güdüm Kanunu (APN + Rendezvous PID)
@@ -276,7 +279,9 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	// 1. Uzak Faz: 3D Augmented Proportional Navigation (R_v > 5.0m)
 	const float N = _param_int_apn_n.get(); // 3.8
 	const matrix::Vector3f a_t_perp = a_v - (u_los * a_v.dot(u_los));
-	const matrix::Vector3f a_cmd_apn = (omega_los.cross(u_los) * (N * V_c)) + (a_t_perp * (0.5f * N));
+
+	const matrix::Vector3f a_cmd_apn = (omega_los.cross(u_los) * (N * math::max(V_c, 2.0f))) +
+					    (a_t_perp * (0.5f * N));
 
 	// 2. Yakın Faz: Sepete Oturma / Hız Eşitleme PID (R_v <= 5.0m)
 	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -5.0f, 5.0f);
@@ -289,7 +294,7 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 		matrix::Vector3f(0.8f * _pos_integral(0), 0.8f * _pos_integral(1), 1.0f * _pos_integral(2));
 
 	// 3. Yumuşak Geçiş (Blending Filter)
-	const float w = math::constrain((R_v - 2.0f) / 3.0f, 0.0f, 1.0f);
+	const float w = math::constrain((R_v - 3.0f) / 3.0f, 0.0f, 1.0f);
 	a_cmd = (a_cmd_apn * w) + (a_cmd_rendezvous * (1.0f - w));
 
 	// Guidance Phase Update
@@ -309,6 +314,27 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 		a_cmd = (a_cmd / a_cmd_norm) * a_max;
 	}
 
+	// 5. Takip Hız Setpointi (Slew-Rate Sınırlı Pürüzsüz Trajektori)
+	const float V_c_des = math::constrain(0.5f * R_v, 2.0f, 7.0f);
+	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
+	const matrix::Vector3f v_des_rdv = v_v + (r_v * 1.0f);
+	const matrix::Vector3f v_des = (v_des_apn * w) + (v_des_rdv * (1.0f - w));
+
+	if (!_sp_vel_initialized) {
+		_sp_vel = self_vel;
+		_sp_vel_initialized = true;
+	}
+
+	const matrix::Vector3f dv = v_des - _sp_vel;
+	const float dv_norm = dv.norm();
+	const float max_dv = 15.0f * dt; // 0.15 m/s per 10ms tick
+
+	if (dv_norm > max_dv) {
+		_sp_vel += (dv / dv_norm) * max_dv;
+	} else {
+		_sp_vel = v_des;
+	}
+
 	// -------------------------------------------------------------------------
 	// D. Yaw Setpoint: Gövde burnu hedefin anlık gidiş vektörüne kilitlenir
 	// -------------------------------------------------------------------------
@@ -323,6 +349,7 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::Vector3f &self_vel, const matrix::Vector3f &u_t)
 {
 	const matrix::Vector3f self_fwd(cosf(_local_pos.heading), sinf(_local_pos.heading), 0.0f);
+	const matrix::Vector3f u_t_horiz = matrix::Vector3f(u_t(0), u_t(1), 0.0f).normalized();
 
 	// Firing envelope criteria:
 	// 1. Sanal sepete <= 0.65m yaklaşma (R_v <= 0.65m)
@@ -330,7 +357,7 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	// 2. Hız farkı <= 1.3 m/s
 	const bool vel_ok = ((self_vel - _target_vel).norm() <= 1.3f);
 	// 3. Vektörel paralellik >= 0.985 (~10 dereceden dar açı)
-	const bool align_ok = (self_fwd.dot(u_t) >= 0.985f);
+	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.985f);
 
 	if (pos_ok && vel_ok && align_ok) {
 		_firing_counter++;
@@ -457,6 +484,7 @@ void Intercept::Run()
 			_pos_integral.zero();
 			_firing_counter = 0;
 			_net_fired = false;
+			_sp_vel_initialized = false;
 		}
 
 		if (_target_pos_valid) {
@@ -469,9 +497,7 @@ void Intercept::Run()
 			_last_a_cmd = a_cmd;
 			_last_yaw_cmd = yaw_cmd;
 
-			const matrix::Vector3f self_vel(_local_pos.vx, _local_pos.vy, _local_pos.vz);
-
-			// Feedforward acceleration + integrated velocity setpoint
+			// Feedforward acceleration + smooth pursuit velocity setpoint
 			trajectory_setpoint_s sp{};
 			sp.timestamp = now;
 			sp.position[0] = NAN;
@@ -480,9 +506,9 @@ void Intercept::Run()
 			sp.acceleration[0] = a_cmd(0);
 			sp.acceleration[1] = a_cmd(1);
 			sp.acceleration[2] = a_cmd(2);
-			sp.velocity[0] = self_vel(0) + a_cmd(0) * dt;
-			sp.velocity[1] = self_vel(1) + a_cmd(1) * dt;
-			sp.velocity[2] = self_vel(2) + a_cmd(2) * dt;
+			sp.velocity[0] = _sp_vel(0);
+			sp.velocity[1] = _sp_vel(1);
+			sp.velocity[2] = _sp_vel(2);
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;
 			_trajectory_setpoint_pub.publish(sp);
@@ -523,6 +549,7 @@ void Intercept::Run()
 			_guidance_phase = GuidancePhase::STANDBY;
 			_pos_integral.zero();
 			_firing_counter = 0;
+			_sp_vel_initialized = false;
 		}
 	}
 }
@@ -557,6 +584,9 @@ int Intercept::print_status()
 
 		PX4_INFO("Target Distance: %.1f m (age: %.2fs), Basket Dist R_v: %.2f m, V_c: %.1f m/s",
 			 (double)dist_tgt, (double)age_s, (double)_last_R_v, (double)_last_V_c);
+
+		PX4_INFO("Basket Vector r_v: [%.2f, %.2f, %.2f] m",
+			 (double)_last_r_v(0), (double)_last_r_v(1), (double)_last_r_v(2));
 
 		PX4_INFO("Command Accel: [%.2f, %.2f, %.2f] m/s^2, Yaw Cmd: %.1f deg",
 			 (double)_last_a_cmd(0), (double)_last_a_cmd(1), (double)_last_a_cmd(2),

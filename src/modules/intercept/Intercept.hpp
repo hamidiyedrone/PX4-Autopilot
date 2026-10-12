@@ -152,6 +152,9 @@ private:
 	float _last_yaw_cmd{0.f};
 	float _last_R_v{0.f};
 	float _last_V_c{0.f};
+	matrix::Vector3f _last_r_v{};
+	matrix::Vector3f _sp_vel{};
+	bool _sp_vel_initialized{false};
 
 	// Net launcher firing envelope states
 	uint32_t _firing_counter{0};
