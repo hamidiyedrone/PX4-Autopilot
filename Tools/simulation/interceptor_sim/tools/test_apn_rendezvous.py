@@ -423,20 +423,40 @@ def main():
     print("      (50 Hz High-Rate Telemetry Recorder & Pitch Stability Analyzer)")
     print("=" * 80, flush=True)
 
+    import argparse
+    parser = argparse.ArgumentParser(description="Octopus Interceptor Flight Test Runner")
+    parser.add_argument("--gui", "--view", dest="gui", action="store_true", help="Gazebo 3D arayüzü ve Kamera HUD penceresini açar")
+    parser.add_argument("--pattern", choices=["square", "weave"], default=os.environ.get("PATTERN", "square"),
+                        help="Talon uçuş rotası: 'square' (kare rota, keskin virajlar) veya 'weave' (S-çizen yılan kaçış manevrası)")
+    parser.add_argument("--speed", type=float, default=18.0, help="Talon uçuş hızı [m/s] (varsayılan: 18)")
+    parser.add_argument("--alt", type=float, default=70.0, help="Talon uçuş irtifası [m] (varsayılan: 70)")
+    parser.add_argument("--side", type=float, default=3000.0, help="Kare rota kenar uzunluğu [m]")
+    parser.add_argument("--weave-amp", type=float, default=30.0, help="S-manevrası sağ-sol kaçış genliği [m] (örn: 25, 40, 50)")
+    parser.add_argument("--duration", type=float, default=120.0, help="Uçuş takip süresi [saniye] (varsayılan: 120)")
+    cli_args = parser.parse_args()
+
     # 1. Clean up lingering simulation processes
     print("[1/6] Önceki simülasyon süreçleri temizleniyor...")
     subprocess.run(["bash", os.path.join(SIM_DIR, "kill.sh")], capture_output=True)
     time.sleep(1.0)
     os.makedirs(os.path.join(SIM_DIR, "build"), exist_ok=True)
 
-    # 2. Launch simulation headless
-    print("[2/6] Gazebo Harmonic ve PX4 SITL başlatılıyor...")
+    # 2. Launch simulation
+    if cli_args.gui:
+        print(f"[2/6] Gazebo Harmonic 3D Görsel GUI ve PX4 SITL başlatılıyor (Rota: {cli_args.pattern}, Hız: {cli_args.speed} m/s, İrtifa: {cli_args.alt} m)...")
+    else:
+        print(f"[2/6] Gazebo Harmonic (Headless) ve PX4 SITL başlatılıyor (Rota: {cli_args.pattern}, Hız: {cli_args.speed} m/s, İrtifa: {cli_args.alt} m)...")
+
     sim_env = dict(os.environ)
-    sim_env["HEADLESS"] = "1"
-    sim_env["VIEW"] = "0"
+    sim_env["HEADLESS"] = "0" if cli_args.gui else os.environ.get("HEADLESS", "1")
+    sim_env["VIEW"] = "1" if cli_args.gui else os.environ.get("VIEW", "0")
     sim_env["WEB_GCS"] = "0"
-    sim_env["PATTERN"] = "square"
-    sim_env["TARGET_ARGS"] = "--speed 18 --alt 70 --side 3000"
+    sim_env["PATTERN"] = cli_args.pattern
+
+    target_args = f"--speed {cli_args.speed} --alt {cli_args.alt} --side {cli_args.side}"
+    if cli_args.pattern == "weave":
+        target_args += f" --weave-amp {cli_args.weave_amp}"
+    sim_env["TARGET_ARGS"] = target_args
 
     log_fd = open(LOG_FILE, "w")
     sim_proc = subprocess.Popen(
@@ -537,7 +557,7 @@ def main():
         phase_transitions = []
         last_phase = ""
 
-        while time.time() - t_start_track < 120.0:
+        while time.time() - t_start_track < cli_args.duration:
             t_elapsed = time.time() - t_start_track
             st = run_px4_cmd("intercept", "status")
             recorder.update_from_intercept_status(st)
