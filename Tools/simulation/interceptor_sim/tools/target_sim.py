@@ -143,8 +143,8 @@ class Profile:
 		self.u = np.array([math.cos(self.yaw0), math.sin(self.yaw0)])
 		self.n = np.array([-self.u[1], self.u[0]])  # left normal
 
-		self.wave_amp = getattr(a, "weave_amp", 26.0)
-		self.wave_len = getattr(a, "weave_wavelength", 550.0)
+		self.wave_amp = float(getattr(a, "weave_amp", 1.5))
+		self.wave_len = float(getattr(a, "weave_wavelength", 120.0))
 		self.wave_phase = 0.0
 
 		if self.pattern == "square":
@@ -179,13 +179,29 @@ class Profile:
 			if "mode" in cmd:
 				m = str(cmd["mode"]).lower()
 				if m in ("straight", "s_turn", "weave", "orbit", "square"):
-					self.mode = "s_turn" if m == "weave" else m
-					if self.mode == "straight":
-						self.target_heading = self.current_heading
-					elif self.mode == "s_turn":
-						self.base_heading = self.current_heading
-						self.wave_phase = 0.0
+					target_m = "s_turn" if m == "weave" else m
+					if target_m != self.mode:
+						if target_m == "straight":
+							self.target_heading = getattr(self, "base_heading", self.current_heading)
+						elif target_m == "s_turn":
+							self.base_heading = getattr(self, "target_heading", self.current_heading)
+							self.wave_phase = 0.0
+						self.mode = target_m
 					res["mode"] = self.mode
+
+			if "wave_amp" in cmd:
+				try:
+					self.wave_amp = float(np.clip(float(cmd["wave_amp"]), 0.2, 50.0))
+					res["wave_amp"] = self.wave_amp
+				except (ValueError, TypeError):
+					pass
+
+			if "wave_len" in cmd:
+				try:
+					self.wave_len = float(np.clip(float(cmd["wave_len"]), 20.0, 2000.0))
+					res["wave_len"] = self.wave_len
+				except (ValueError, TypeError):
+					pass
 
 			if "speed" in cmd:
 				try:
@@ -484,8 +500,8 @@ def main():
 	ap.add_argument("--heading", type=float, default=None, help="first side [deg true], default: runway")
 	ap.add_argument("--pattern", choices=["straight", "weave", "orbit", "square"], default="straight",
 			help="flight path pattern: 'straight', 'weave' (S-turns), 'orbit' (circle), or 'square' (square circuit)")
-	ap.add_argument("--weave-amp", type=float, default=26.0, help="lateral weave amplitude [m] (controls bank angle)")
-	ap.add_argument("--weave-wavelength", type=float, default=550.0, help="weave cycle wavelength [m]")
+	ap.add_argument("--weave-amp", type=float, default=1.5, help="lateral weave amplitude [m] (controls drift corridor)")
+	ap.add_argument("--weave-wavelength", type=float, default=120.0, help="weave cycle wavelength [m]")
 	ap.add_argument("--rate", type=float, default=2.0, help="telemetry rate [Hz]")
 	ap.add_argument("--http-port", type=int, default=8000)
 	ap.add_argument("--adsb", default="udpout:127.0.0.1:14580", help="MAVLink target for ADSB_VEHICLE, '' = off")
