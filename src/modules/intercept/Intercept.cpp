@@ -183,7 +183,7 @@ void Intercept::UpdateVisualDetection()
 		}
 	}
 
-	const float lost_timeout_s = math::max(_param_int_lost_timeout.get(), 0.2f);
+	const float lost_timeout_s = math::max(_param_int_lost_tout.get(), 0.2f);
 	const uint64_t lost_timeout_us = (uint64_t)(lost_timeout_s * 1e6f);
 
 	if (_visual_contact && (hrt_elapsed_time(&_last_visual_contact) > lost_timeout_us)) {
@@ -285,7 +285,7 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 		target_dir = _target_vel / target_speed;
 	}
 
-	const float min_closing = _param_int_min_closing.get();
+	const float min_closing = _param_int_app_min_vel.get();
 
 	// 2. Direct acceleration control based on closing distance and closing rate
 	if (dist_to_target > 100.0f) {
@@ -356,7 +356,7 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	// delta_z in NED: negative means intercept point is higher (climb), positive is lower (descend)
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
-	const float K_z_p = _param_int_kp_z_app.get();
+	const float K_z_p = _param_int_app_kp_z.get();
 	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.5f, 3.5f);
 
 	// Slew-rate limit vertical velocity (max 5.0 m/s^2 acceleration) to rapidly match altitude
@@ -374,7 +374,7 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	const float desired_yaw = atan2f(dy, dx);
 
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float max_yaw_rate = math::radians(_param_int_app_yawrate.get());
 		const float max_dyaw = max_yaw_rate * dt;
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
 		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
@@ -463,8 +463,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Closing speed error: difference between actual closing rate and desired closing rate
 	const float closing_err = _filt_visual_closing_speed - desired_closing;
 
-	const float kp_opt = _param_int_kp_opt.get();
-	const float kd_opt = _param_int_kd_opt.get();
+	const float kp_opt = _param_int_trm_kp_fwd.get();
+	const float kd_opt = _param_int_trm_kd_fwd.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 
 	constexpr float DIST_TOL = 0.25f; // +/- 25 cm corridor around desired_dist
@@ -484,7 +484,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// If the target shifts laterally away from boresight center, brake forward speed
 	// to tighten turn radius and prevent overshooting past the target.
 	float corner_brake = 0.0f;
-	const float max_crn_brake = _param_int_crn_brake.get();
+	const float max_crn_brake = _param_int_trm_brk_lat.get();
 	if (current_range < 5.0f && max_crn_brake > 0.0f) {
 		const float lat_offset = fabsf(cx - 0.50f);
 		constexpr float LAT_BRAKE_DEADBAND = 0.08f; // center corridor [0.42, 0.58]
@@ -517,7 +517,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 	// 3. 3D Velocity Command
 	// Coordinated Flight: forward velocity flows primarily along Line-of-Sight.
-	// Lateral strafe is bounded via INT_LAT_VEL_MAX and driven by INT_KP_LAT.
+	// Lateral strafe is bounded via INT_TRM_LAT_MAX and driven by INT_TRM_KP_LAT.
 	float lat_err = 0.0f;
 	if (cx < 0.45f) {
 		lat_err = cx - 0.45f;
@@ -526,8 +526,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	} else {
 		lat_err = 0.0f;
 	}
-	const float kp_lat = _param_int_kp_lat.get();
-	const float max_lat_vel = _param_int_lat_vel_max.get();
+	const float kp_lat = _param_int_trm_kp_lat.get();
+	const float max_lat_vel = _param_int_trm_lat_max.get();
 	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -max_lat_vel, max_lat_vel);
 
 	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
@@ -551,7 +551,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Computes physical altitude difference directly from optical line-of-sight elevation and metric distance:
 	const float delta_z = current_range * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
-	const float z_tol = _param_int_z_tol.get();
+	const float z_tol = _param_int_trm_z_tol.get();
 	float delta_z_corr = 0.0f;
 	if (delta_z < -z_tol) {
 		delta_z_corr = delta_z + z_tol; // target higher (NED negative) -> climb
@@ -561,15 +561,15 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		delta_z_corr = 0.0f; // within +/- corridor -> hold level flight
 	}
 
-	const float kp_z = _param_int_kp_z.get();
+	const float kp_z = _param_int_trm_kp_z.get();
 	float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
 	if (fabsf(delta_z_corr) < FLT_EPSILON) {
 		vz_desired = 0.0f;
 	}
 
-	// Slew-rate limit vertical acceleration matching INT_ACC_Z_CL to prevent pitch oscillations
+	// Slew-rate limit vertical acceleration matching INT_TRM_ACC_Z to prevent pitch oscillations
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dvz = _param_int_acc_z_cl.get() * dt;
+		const float max_dvz = _param_int_trm_acc_z.get() * dt;
 		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
 	} else {
 		vel_cmd(2) = vz_desired;
@@ -601,7 +601,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		// Eliminates overshoot completely by docking gently at the deadband threshold
 		const float center_dist = fabsf(cx - 0.50f);
 		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, 0.25f, 1.0f);
-		const float max_close_yaw_rate = math::radians(_param_int_yaw_rate_cl.get());
+		const float max_close_yaw_rate = math::radians(_param_int_trm_yawrate.get());
 		const float max_dyaw = (max_close_yaw_rate * rate_factor) * dt;
 
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
@@ -621,7 +621,7 @@ void Intercept::ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, fl
 	constexpr float DT_WORK_ITEM = 0.02f; // ~50Hz work item step
 
 	if (_last_cmd_valid) {
-		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float max_yaw_rate = math::radians(_param_int_app_yawrate.get());
 		const float max_dyaw = max_yaw_rate * DT_WORK_ITEM;
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
 		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
@@ -641,7 +641,7 @@ void Intercept::ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, fl
 
 	// Altitude: track target altitude
 	const float dz = _target_pos(2) - _local_pos.z;
-	vel_cmd(2) = math::constrain(dz * _param_int_kp_z.get(), -2.5f, 2.0f);
+	vel_cmd(2) = math::constrain(dz * _param_int_trm_kp_z.get(), -2.5f, 2.0f);
 }
 
 void Intercept::Run()
@@ -730,7 +730,7 @@ void Intercept::Run()
 		} else if (_guidance_state == GuidanceState::CLOSE_PURSUIT) {
 			if (!_visual_contact) {
 				ResetGuidanceState();
-				PX4_WARN("Visual contact lost (>%.1fs), reverting to APPROACH", (double)_param_int_lost_timeout.get());
+				PX4_WARN("Visual contact lost (>%.1fs), reverting to APPROACH", (double)_param_int_lost_tout.get());
 			}
 		}
 

@@ -109,70 +109,70 @@ def load_intercept_param_metadata():
 				"short": "Desired terminal standoff distance",
 				"long": "Horizontal distance in meters to maintain behind target during close pursuit."
 			},
-			"INT_MIN_CLOSING": {
-				"name": "INT_MIN_CLOSING", "type": "float", "default": 6.0, "min": 2.0, "max": 15.0, "decimal": 1,
+			"INT_LOST_TOUT": {
+				"name": "INT_LOST_TOUT", "type": "float", "default": 2.0, "min": 0.5, "max": 10.0, "decimal": 1,
+				"short": "Visual contact loss timeout",
+				"long": "Time in seconds to steer towards target position and re-acquire visual before reverting to approach."
+			},
+			"INT_APP_MIN_VEL": {
+				"name": "INT_APP_MIN_VEL", "type": "float", "default": 6.0, "min": 2.0, "max": 15.0, "decimal": 1,
 				"short": "Minimum closing speed in approach guidance",
 				"long": "Minimum relative closing speed (m/s) maintained in midcourse position approach guidance."
 			},
-			"INT_KP_OPT": {
-				"name": "INT_KP_OPT", "type": "float", "default": 4.5, "min": 0.5, "max": 15.0, "decimal": 1,
-				"short": "Standoff distance error velocity gain",
-				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
-			},
-			"INT_KD_OPT": {
-				"name": "INT_KD_OPT", "type": "float", "default": 1.2, "min": 0.1, "max": 10.0, "decimal": 2,
-				"short": "Optical relative velocity damping gain",
-				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
-			},
-			"INT_KP_LAT": {
-				"name": "INT_KP_LAT", "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "decimal": 2,
-				"short": "Proportional gain for lateral visual tracking",
-				"long": "Proportional gain (m/s per unit screen error) for centering target horizontally."
-			},
-			"INT_LAT_VEL_MAX": {
-				"name": "INT_LAT_VEL_MAX", "type": "float", "default": 0.8, "min": 0.0, "max": 5.0, "decimal": 1,
-				"short": "Maximum lateral strafe speed in close pursuit",
-				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
-			},
-			"INT_CRN_BRAKE": {
-				"name": "INT_CRN_BRAKE", "type": "float", "default": 5.0, "min": 0.0, "max": 10.0, "decimal": 1,
-				"short": "Maximum corner braking speed reduction",
-				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
-			},
-			"INT_KP_Z": {
-				"name": "INT_KP_Z", "type": "float", "default": 0.6, "min": 0.1, "max": 5.0, "decimal": 2,
-				"short": "Close pursuit altitude tracking proportional gain",
-				"long": "Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking."
-			},
-			"INT_Z_TOL": {
-				"name": "INT_Z_TOL", "type": "float", "default": 0.3, "min": 0.05, "max": 1.0, "decimal": 2,
-				"short": "Altitude tracking deadband tolerance",
-				"long": "Altitude deadband tolerance (+/- meters) in close pursuit to prevent optical pitch oscillations."
-			},
-			"INT_ACC_Z_CL": {
-				"name": "INT_ACC_Z_CL", "type": "float", "default": 1.2, "min": 0.2, "max": 5.0, "decimal": 1,
-				"short": "Close pursuit vertical acceleration limit",
-				"long": "Maximum vertical acceleration (m/s^2) in close pursuit to prevent pitch oscillations."
-			},
-			"INT_KP_Z_APP": {
-				"name": "INT_KP_Z_APP", "type": "float", "default": 0.8, "min": 0.1, "max": 3.0, "decimal": 2,
+			"INT_APP_KP_Z": {
+				"name": "INT_APP_KP_Z", "type": "float", "default": 0.8, "min": 0.1, "max": 3.0, "decimal": 2,
 				"short": "Approach mode altitude tracking proportional gain",
 				"long": "Proportional gain (m/s per meter altitude error) for midcourse approach altitude tracking."
 			},
-			"INT_YAW_RATE": {
-				"name": "INT_YAW_RATE", "type": "float", "default": 42.0, "min": 5.0, "max": 90.0, "decimal": 1,
+			"INT_APP_YAWRATE": {
+				"name": "INT_APP_YAWRATE", "type": "float", "default": 42.0, "min": 5.0, "max": 90.0, "decimal": 1,
 				"short": "Maximum heading slew rate in approach",
 				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
 			},
-			"INT_YAW_RATE_CL": {
-				"name": "INT_YAW_RATE_CL", "type": "float", "default": 18.0, "min": 5.0, "max": 60.0, "decimal": 1,
-				"short": "Maximum heading slew rate in close pursuit",
-				"long": "Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting."
+			"INT_TRM_KP_FWD": {
+				"name": "INT_TRM_KP_FWD", "type": "float", "default": 4.5, "min": 0.5, "max": 15.0, "decimal": 1,
+				"short": "Terminal standoff distance error velocity gain",
+				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
 			},
-			"INT_LOST_TIMEOUT": {
-				"name": "INT_LOST_TIMEOUT", "type": "float", "default": 2.0, "min": 0.5, "max": 10.0, "decimal": 1,
-				"short": "Visual contact loss timeout",
-				"long": "Time in seconds to steer towards target position and re-acquire visual before reverting to approach."
+			"INT_TRM_KD_FWD": {
+				"name": "INT_TRM_KD_FWD", "type": "float", "default": 1.2, "min": 0.1, "max": 10.0, "decimal": 2,
+				"short": "Terminal relative closing speed damping gain",
+				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
+			},
+			"INT_TRM_KP_LAT": {
+				"name": "INT_TRM_KP_LAT", "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "decimal": 2,
+				"short": "Terminal lateral visual tracking proportional gain",
+				"long": "Proportional gain (m/s per unit screen error) for centering target horizontally."
+			},
+			"INT_TRM_LAT_MAX": {
+				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.8, "min": 0.0, "max": 5.0, "decimal": 1,
+				"short": "Terminal maximum lateral strafe speed",
+				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
+			},
+			"INT_TRM_BRK_LAT": {
+				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 5.0, "min": 0.0, "max": 10.0, "decimal": 1,
+				"short": "Terminal lateral cornering brake speed reduction",
+				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
+			},
+			"INT_TRM_KP_Z": {
+				"name": "INT_TRM_KP_Z", "type": "float", "default": 0.6, "min": 0.1, "max": 5.0, "decimal": 2,
+				"short": "Terminal altitude tracking proportional gain",
+				"long": "Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking."
+			},
+			"INT_TRM_Z_TOL": {
+				"name": "INT_TRM_Z_TOL", "type": "float", "default": 0.3, "min": 0.05, "max": 1.0, "decimal": 2,
+				"short": "Terminal altitude tracking deadband tolerance",
+				"long": "Altitude deadband tolerance (+/- meters) in close pursuit to prevent optical pitch oscillations."
+			},
+			"INT_TRM_ACC_Z": {
+				"name": "INT_TRM_ACC_Z", "type": "float", "default": 1.2, "min": 0.2, "max": 5.0, "decimal": 1,
+				"short": "Terminal close pursuit vertical acceleration limit",
+				"long": "Maximum vertical acceleration (m/s^2) in close pursuit to prevent pitch oscillations."
+			},
+			"INT_TRM_YAWRATE": {
+				"name": "INT_TRM_YAWRATE", "type": "float", "default": 18.0, "min": 5.0, "max": 60.0, "decimal": 1,
+				"short": "Terminal maximum heading slew rate",
+				"long": "Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting."
 			},
 		}
 	return params
