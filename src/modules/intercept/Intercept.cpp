@@ -292,14 +292,16 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	const matrix::Vector3f a_cmd_apn_lat = (omega_los.cross(u_los) * (N * math::max(V_c, 2.0f))) +
 					       (a_t_perp * (0.5f * N));
 
-	// Desired pursuit velocity: sprint closing velocity when far, smooth deceleration approaching basket
-	const float V_c_des = math::constrain(0.70f * R_v, 0.0f, 15.0f);
+	// Desired pursuit velocity: sprint closing velocity when far, smooth positive closing approaching basket
+	const float V_c_des = math::constrain(0.70f * R_v, 1.8f, 15.0f);
 	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
 
-	// Longitudinal closing acceleration along LOS to achieve and maintain V_c_des
+	// Longitudinal closing acceleration along LOS to achieve and maintain V_c_des (with low-pass damping)
 	const matrix::Vector3f v_err_apn = v_des_apn - self_vel;
-	const float a_long_apn_mag = math::constrain(v_err_apn.dot(u_los) * 2.2f, -4.5f, 35.0f);
-	const matrix::Vector3f a_cmd_apn = a_cmd_apn_lat + (u_los * a_long_apn_mag);
+	const float a_long_raw = math::constrain(v_err_apn.dot(u_los) * 1.5f, -4.5f, 35.0f);
+	const float alpha_long = math::constrain(dt / 0.25f, 0.05f, 0.5f);
+	_a_long_filtered = _a_long_filtered * (1.0f - alpha_long) + a_long_raw * alpha_long;
+	const matrix::Vector3f a_cmd_apn = a_cmd_apn_lat + (u_los * _a_long_filtered);
 
 	// 2. Yakın Faz: Sepete Oturma / Hız Eşitleme PID (R_v <= 5.0m)
 	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -5.0f, 5.0f);
@@ -312,8 +314,8 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 		matrix::Vector3f(4.2f * v_rel(0), 4.2f * v_rel(1), 4.5f * v_rel(2)) +
 		matrix::Vector3f(0.8f * _pos_integral(0), 0.8f * _pos_integral(1), 1.0f * _pos_integral(2));
 
-	// 3. Yumuşak Geçiş (Blending Filter: 2.0m ile 6.0m arası)
-	const float w = math::constrain((R_v - 2.0f) / 4.0f, 0.0f, 1.0f);
+	// 3. Yumuşak Geçiş (Blending Filter: 2.0m ile 12.0m arası)
+	const float w = math::constrain((R_v - 2.0f) / 10.0f, 0.0f, 1.0f);
 	const matrix::Vector3f v_des = (v_des_apn * w) + (v_des_rdv * (1.0f - w));
 
 	_sp_vel = v_des;
@@ -348,7 +350,7 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	}
 
 	// Jerk / slew-rate limit on commanded acceleration (prevents violent pitch snap)
-	const float max_jerk = 70.0f; // 70 m/s^3
+	const float max_jerk = 35.0f; // 35 m/s^3
 	const matrix::Vector3f da = a_cmd - _prev_a_cmd;
 	const float da_norm = da.norm();
 
@@ -542,8 +544,8 @@ void Intercept::Run()
 			sp.acceleration[0] = a_cmd(0);
 			sp.acceleration[1] = a_cmd(1);
 			sp.acceleration[2] = low_altitude_takeoff ? -3.0f : _target_accel(2);
-			sp.velocity[0] = NAN;
-			sp.velocity[1] = NAN;
+			sp.velocity[0] = low_altitude_takeoff ? NAN : _sp_vel(0);
+			sp.velocity[1] = low_altitude_takeoff ? NAN : _sp_vel(1);
 			sp.velocity[2] = low_altitude_takeoff ? -2.0f : _v_v(2);
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;

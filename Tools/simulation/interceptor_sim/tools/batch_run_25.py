@@ -403,9 +403,9 @@ class TelemetryRecorder:
                 v_rel = p_tgt["vel"] - p_int["vel"]
                 closing_vc_gt = -float(np.dot(v_rel, p_diff)) / max(0.1, target_dist_gt)
 
-                # Use PX4 estimated value if available, else ground-truth
-                eff_rv = self.basket_rv if self.basket_rv < 500.0 else basket_dist_gt
-                eff_rt = self.target_rt if self.target_rt < 500.0 else target_dist_gt
+                # Use PX4 estimated value if available and valid (>0.05m), else ground-truth
+                eff_rv = self.basket_rv if (0.05 < self.basket_rv < 500.0) else basket_dist_gt
+                eff_rt = self.target_rt if (0.05 < self.target_rt < 500.0) else target_dist_gt
                 eff_vc = self.closing_vc if abs(self.closing_vc) > 0.01 else closing_vc_gt
 
                 # Euler angles from quaternions
@@ -466,7 +466,7 @@ class TelemetryRecorder:
         active = [r for r in rec if r["phase"] not in ("STANDBY", "")] or rec
         pitches = [r["int_pitch_deg"] for r in active]
         tilts = [r["int_tilt_deg"] for r in active]
-        rvs = [r["basket_dist_rv"] for r in active if r["basket_dist_rv"] < 800]
+        rvs = [r["basket_dist_rv"] for r in active if 0.05 < r["basket_dist_rv"] < 800]
         vcs = [r["closing_speed_vc"] for r in active]
 
         p_diff = np.diff(pitches)
@@ -564,23 +564,7 @@ def execute_single_run(scen, max_duration=115.0):
     run_px4_cmd("commander", "arm")
     time.sleep(0.5)
     run_px4_cmd("commander", "takeoff")
-    # Wait for vehicle to lift off and reach safe altitude (> 2.0m)
-    for _ in range(15):
-        lp_out = run_px4_cmd("listener", "vehicle_local_position")
-        climbing = False
-        for line in lp_out.splitlines():
-            if line.strip().startswith("z:"):
-                try:
-                    z_val = float(line.split(":")[-1].strip())
-                    if z_val < -2.0:
-                        climbing = True
-                        break
-                except ValueError:
-                    pass
-        if climbing:
-            time.sleep(1.0)
-            break
-        time.sleep(1.0)
+    time.sleep(1.5)
     run_px4_cmd("commander", "mode", "ext1")
 
     # 6. Pursuit & Dynamic Maneuver Execution

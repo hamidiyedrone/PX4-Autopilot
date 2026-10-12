@@ -159,6 +159,7 @@ private:
 	matrix::Vector3f _pos_integral{};
 	matrix::Vector3f _last_a_cmd{};
 	matrix::Vector3f _prev_a_cmd{};
+	float _a_long_filtered{0.f};
 	float _last_yaw_cmd{0.f};
 	float _last_R_v{0.f};
 	float _last_V_c{0.f};
