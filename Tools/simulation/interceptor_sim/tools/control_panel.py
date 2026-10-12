@@ -2,16 +2,22 @@
 """
 Control Panel (PySide6)
 
-Left: interactive control over the simulated Talon target:
-- Flight mode switching: Straight, S-Turn (Weave), Orbit
-- Directional D-Pad remote control (climb/descend, turn left/right while held)
-- Speed and altitude adjustment sliders & presets
-- Real-time telemetry monitoring
+Tab 1: Flight Control
+- Left: interactive control over the simulated Talon target:
+  - Flight mode switching: Straight, S-Turn (Weave), Orbit
+  - Directional D-Pad remote control (climb/descend, turn left/right while held)
+  - Speed and altitude adjustment sliders & presets
+  - Real-time telemetry monitoring
+- Right: interceptor (PX4) control over MAVLink:
+  - Flight mode selection from the modes PX4 reports (AVAILABLE_MODES, incl. external modes)
+  - Arm/Disarm, Takeoff
+  - Live telemetry and the latest PX4 status text / command rejection
 
-Right: interceptor (PX4) control over MAVLink:
-- Flight mode selection from the modes PX4 reports (AVAILABLE_MODES, incl. external modes)
-- Arm/Disarm, Takeoff
-- Live telemetry and the latest PX4 status text / command rejection
+Tab 2: Intercept Mode Parameters (INT_*)
+- Live synchronization with PX4 via MAVLink (PARAM_REQUEST_READ / PARAM_VALUE / PARAM_SET)
+- Edit individual parameters or save all to PX4 and persistent storage
+- View default values, min/max allowable ranges, and full documentation from module.yaml
+- Search/filter parameters in real-time
 
 Connects to target_sim.py HTTP API at http://localhost:8000 and to the PX4 GCS link
 (udp 14550) as the ground station, so QGroundControl cannot run at the same time.
@@ -20,38 +26,157 @@ Connects to target_sim.py HTTP API at http://localhost:8000 and to the PX4 GCS l
 import argparse
 import json
 import os
+import struct
 import sys
 import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlencode
 
+import yaml
+
 os.environ.setdefault("MAVLINK20", "1")  # AVAILABLE_MODES is a MAVLink 2 message
 from pymavlink import mavutil  # noqa: E402
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTransform
+from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QTransform
 from PySide6.QtWidgets import (
 	QApplication,
 	QComboBox,
+	QDoubleSpinBox,
 	QGridLayout,
 	QGroupBox,
 	QHBoxLayout,
+	QHeaderView,
 	QLabel,
+	QLineEdit,
 	QMainWindow,
 	QPushButton,
 	QSlider,
 	QSizePolicy,
 	QSpinBox,
 	QStyle,
+	QTableWidget,
+	QTableWidgetItem,
+	QTabWidget,
 	QToolButton,
 	QVBoxLayout,
 	QWidget,
 )
 
-
 # AVAILABLE_MODES is only in the development dialect of pymavlink (same CRC as PX4)
 mavutil.set_dialect("development")
 mav = mavutil.mavlink
+
+
+def load_intercept_param_metadata():
+	"""Load intercept mode parameter definitions, types, defaults, and descriptions from module.yaml."""
+	yaml_path = os.path.abspath(
+		os.path.join(os.path.dirname(__file__), "../../../..", "src/modules/intercept/module.yaml")
+	)
+	params = {}
+	if os.path.isfile(yaml_path):
+		try:
+			with open(yaml_path, "r", encoding="utf-8") as f:
+				data = yaml.safe_load(f)
+			for group in data.get("parameters", []):
+				for name, info in group.get("definitions", {}).items():
+					desc = info.get("description", {})
+					short_desc = desc.get("short", "") if isinstance(desc, dict) else str(desc)
+					long_desc = desc.get("long", "") if isinstance(desc, dict) else ""
+					params[name] = {
+						"name": name,
+						"type": info.get("type", "float"),
+						"default": info.get("default", 0.0),
+						"min": info.get("min", None),
+						"max": info.get("max", None),
+						"decimal": info.get("decimal", 2),
+						"short": short_desc,
+						"long": long_desc,
+					}
+		except Exception as e:
+			print(f"Warning: Failed to parse module.yaml ({e}), using built-in defaults.")
+
+	# Safe fallback if module.yaml could not be read
+	if not params:
+		params = {
+			"INT_ENABLE": {
+				"name": "INT_ENABLE", "type": "boolean", "default": 1, "min": 0, "max": 1,
+				"short": "Enable intercept flight mode",
+				"long": "Enables the target intercept autonomous flight mode."
+			},
+			"INT_STANDOFF": {
+				"name": "INT_STANDOFF", "type": "float", "default": 3.0, "min": 1.0, "max": 10.0, "decimal": 1,
+				"short": "Desired terminal standoff distance",
+				"long": "Horizontal distance in meters to maintain behind target during close pursuit."
+			},
+			"INT_MIN_CLOSING": {
+				"name": "INT_MIN_CLOSING", "type": "float", "default": 6.0, "min": 2.0, "max": 15.0, "decimal": 1,
+				"short": "Minimum closing speed in approach guidance",
+				"long": "Minimum relative closing speed (m/s) maintained in midcourse position approach guidance."
+			},
+			"INT_KP_OPT": {
+				"name": "INT_KP_OPT", "type": "float", "default": 4.5, "min": 0.5, "max": 15.0, "decimal": 1,
+				"short": "Standoff distance error velocity gain",
+				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
+			},
+			"INT_KD_OPT": {
+				"name": "INT_KD_OPT", "type": "float", "default": 1.2, "min": 0.1, "max": 10.0, "decimal": 2,
+				"short": "Optical relative velocity damping gain",
+				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
+			},
+			"INT_KP_LAT": {
+				"name": "INT_KP_LAT", "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "decimal": 2,
+				"short": "Proportional gain for lateral visual tracking",
+				"long": "Proportional gain (m/s per unit screen error) for centering target horizontally."
+			},
+			"INT_LAT_VEL_MAX": {
+				"name": "INT_LAT_VEL_MAX", "type": "float", "default": 0.8, "min": 0.0, "max": 5.0, "decimal": 1,
+				"short": "Maximum lateral strafe speed in close pursuit",
+				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
+			},
+			"INT_CRN_BRAKE": {
+				"name": "INT_CRN_BRAKE", "type": "float", "default": 5.0, "min": 0.0, "max": 10.0, "decimal": 1,
+				"short": "Maximum corner braking speed reduction",
+				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
+			},
+			"INT_KP_Z": {
+				"name": "INT_KP_Z", "type": "float", "default": 0.6, "min": 0.1, "max": 5.0, "decimal": 2,
+				"short": "Close pursuit altitude tracking proportional gain",
+				"long": "Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking."
+			},
+			"INT_Z_TOL": {
+				"name": "INT_Z_TOL", "type": "float", "default": 0.3, "min": 0.05, "max": 1.0, "decimal": 2,
+				"short": "Altitude tracking deadband tolerance",
+				"long": "Altitude deadband tolerance (+/- meters) in close pursuit to prevent optical pitch oscillations."
+			},
+			"INT_ACC_Z_CL": {
+				"name": "INT_ACC_Z_CL", "type": "float", "default": 1.2, "min": 0.2, "max": 5.0, "decimal": 1,
+				"short": "Close pursuit vertical acceleration limit",
+				"long": "Maximum vertical acceleration (m/s^2) in close pursuit to prevent pitch oscillations."
+			},
+			"INT_KP_Z_APP": {
+				"name": "INT_KP_Z_APP", "type": "float", "default": 0.8, "min": 0.1, "max": 3.0, "decimal": 2,
+				"short": "Approach mode altitude tracking proportional gain",
+				"long": "Proportional gain (m/s per meter altitude error) for midcourse approach altitude tracking."
+			},
+			"INT_YAW_RATE": {
+				"name": "INT_YAW_RATE", "type": "float", "default": 42.0, "min": 5.0, "max": 90.0, "decimal": 1,
+				"short": "Maximum heading slew rate in approach",
+				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
+			},
+			"INT_YAW_RATE_CL": {
+				"name": "INT_YAW_RATE_CL", "type": "float", "default": 18.0, "min": 5.0, "max": 60.0, "decimal": 1,
+				"short": "Maximum heading slew rate in close pursuit",
+				"long": "Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting."
+			},
+			"INT_LOST_TIMEOUT": {
+				"name": "INT_LOST_TIMEOUT", "type": "float", "default": 2.0, "min": 0.5, "max": 10.0, "decimal": 1,
+				"short": "Visual contact loss timeout",
+				"long": "Time in seconds to steer towards target position and re-acquire visual before reverting to approach."
+			},
+		}
+	return params
+
 
 class TelemetryWorker(QObject):
 	"""Worker thread to poll target telemetry and dispatch commands asynchronously."""
@@ -97,11 +222,12 @@ class TelemetryWorker(QObject):
 
 
 class MavlinkWorker(QObject):
-	"""Runs in its own thread: reads the PX4 MAVLink link, keeps the mode list and telemetry."""
+	"""Runs in its own thread: reads the PX4 MAVLink link, handles modes, telemetry and parameters."""
 
 	modes_received = Signal(list)  # [(name, custom_mode), ...]
 	telemetry_received = Signal(dict)
 	message_received = Signal(str)
+	param_received = Signal(str, float, int)  # param_name, value, param_type
 
 	# PX4 sends a name only for non-standard modes
 	STANDARD_MODE_NAMES = {
@@ -178,6 +304,29 @@ class MavlinkWorker(QObject):
 							[modes[i] for i in sorted(modes) if not modes[i][0].startswith("(")]
 						)
 
+				elif t == "PARAM_VALUE":
+					name = msg.param_id
+					if isinstance(name, bytes):
+						name = name.decode("ascii", errors="ignore").rstrip("\x00")
+					elif isinstance(name, str):
+						name = name.rstrip("\x00")
+
+					val = msg.param_value
+					ptype = msg.param_type
+					if ptype in (
+						mav.MAV_PARAM_TYPE_INT32,
+						mav.MAV_PARAM_TYPE_UINT32,
+						mav.MAV_PARAM_TYPE_INT8,
+						mav.MAV_PARAM_TYPE_UINT8,
+						mav.MAV_PARAM_TYPE_INT16,
+						mav.MAV_PARAM_TYPE_UINT16,
+					):
+						try:
+							val = float(struct.unpack("i", struct.pack("f", val))[0])
+						except Exception:
+							pass
+					self.param_received.emit(name, val, ptype)
+
 				elif t == "GLOBAL_POSITION_INT":
 					state["alt_rel_m"] = msg.relative_alt / 1000.0
 					state["heading_deg"] = msg.hdg / 100.0 if msg.hdg != 65535 else None
@@ -230,6 +379,41 @@ class MavlinkWorker(QObject):
 		sub_mode = (custom_mode >> 24) & 0xFF
 		self.send_command(mav.MAV_CMD_DO_SET_MODE, mav.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main_mode, sub_mode)
 
+	def request_param(self, name):
+		if self.conn is None or self.target_system is None:
+			return
+		param_id = name.encode("ascii")[:16]
+		self.conn.mav.param_request_read_send(
+			self.target_system,
+			self.target_component,
+			param_id,
+			-1,
+		)
+
+	def set_param(self, name, value, is_int=False):
+		if self.conn is None or self.target_system is None:
+			return
+		param_id = name.encode("ascii")[:16]
+		if is_int:
+			packed_val = struct.unpack("f", struct.pack("i", int(value)))[0]
+			ptype = mav.MAV_PARAM_TYPE_INT32
+		else:
+			packed_val = float(value)
+			ptype = mav.MAV_PARAM_TYPE_REAL32
+		self.conn.mav.param_set_send(
+			self.target_system,
+			self.target_component,
+			param_id,
+			packed_val,
+			ptype,
+		)
+
+	def save_params_to_storage(self):
+		"""Command PX4 to persist current parameters into non-volatile storage."""
+		if self.conn is None or self.target_system is None:
+			return
+		self.send_command(mav.MAV_CMD_PREFLIGHT_STORAGE, 1.0)
+
 
 class ControlPanelWindow(QMainWindow):
 	HOLD_PERIOD_MS = 100  # nudge rate while a direction is held
@@ -245,8 +429,16 @@ class ControlPanelWindow(QMainWindow):
 		self.target_alt = 100.0
 		self.target_heading = 0.0
 
-		self.setWindowTitle("Control Panel")
-		self.setFixedSize(800, 450)
+		self.setWindowTitle("Interceptor Sim - Control Panel")
+		self.resize(960, 620)
+		self.setMinimumSize(880, 520)
+
+		# Parameter management state
+		self.param_metadata = load_intercept_param_metadata()
+		self.px4_param_values = {}
+		self.param_editors = {}
+		self.param_px4_items = {}
+		self._initial_params_requested = False
 
 		self.worker = TelemetryWorker(host, port)
 		self.poll_timer = QTimer(self)
@@ -269,6 +461,7 @@ class ControlPanelWindow(QMainWindow):
 		self.mav_worker.modes_received.connect(self.on_modes)
 		self.mav_worker.telemetry_received.connect(self.on_drone_telemetry)
 		self.mav_worker.message_received.connect(self.on_drone_message)
+		self.mav_worker.param_received.connect(self.on_param_received)
 
 		self._init_ui()
 		self._setup_shortcuts()
@@ -277,17 +470,20 @@ class ControlPanelWindow(QMainWindow):
 		self.mav_thread.start()
 
 	def _init_ui(self):
-		central = QWidget(self)
-		self.setCentralWidget(central)
-		root_layout = QHBoxLayout(central)
+		self.tabs = QTabWidget(self)
+		self.setCentralWidget(self.tabs)
+
+		# Tab 1: Flight Control
+		flight_tab = QWidget()
+		flight_layout = QHBoxLayout(flight_tab)
 
 		# Left half: target control
-		target_group = QGroupBox("Target")
+		target_group = QGroupBox("Target (Talon)")
 		main_layout = QVBoxLayout(target_group)
-		root_layout.addWidget(target_group, 1)
+		flight_layout.addWidget(target_group, 1)
 
 		# Right half: interceptor control
-		self._init_interceptor_ui(root_layout)
+		self._init_interceptor_ui(flight_layout)
 
 		# 1. Flight Mode Selection
 		mode_group = QGroupBox("Flight Mode")
@@ -317,7 +513,6 @@ class ControlPanelWindow(QMainWindow):
 		grid.setSpacing(2)
 		grid.setAlignment(Qt.AlignCenter)
 
-		# One arrow icon rotated for all four directions so they look identical
 		up_arrow = self.style().standardIcon(QStyle.SP_ArrowUp).pixmap(20, 20)
 		pad_buttons = [
 			("up", 0, 0, 1, "Climb while held [Shortcut: Up]"),
@@ -334,7 +529,6 @@ class ControlPanelWindow(QMainWindow):
 			b.pressed.connect(lambda d=direction: self._hold_start(d))
 			b.released.connect(lambda d=direction: self._hold_stop(d))
 			grid.addWidget(b, row, col)
-
 
 		# 3. Speed & Altitude Setpoints
 		set_group = QGroupBox("Speed && Altitude")
@@ -423,8 +617,17 @@ class ControlPanelWindow(QMainWindow):
 		main_layout.addWidget(telem_group)
 		main_layout.addStretch()
 
+		self.tabs.addTab(flight_tab, "🎮 Uçuş Kontrol")
+
+		# Tab 2: Intercept Parameters
+		params_tab = QWidget()
+		self._init_params_ui(params_tab)
+		self.tabs.addTab(params_tab, "⚙ Parametreler (Intercept)")
+
+		self.tabs.currentChanged.connect(self._on_tab_changed)
+
 	def _init_interceptor_ui(self, root_layout):
-		interceptor_group = QGroupBox("Interceptor")
+		interceptor_group = QGroupBox("Interceptor (PX4)")
 		layout = QVBoxLayout(interceptor_group)
 		root_layout.addWidget(interceptor_group, 1)
 
@@ -478,6 +681,315 @@ class ControlPanelWindow(QMainWindow):
 		layout.addWidget(telem_group)
 		layout.addStretch()
 
+	def _init_params_ui(self, parent):
+		layout = QVBoxLayout(parent)
+		layout.setContentsMargins(10, 10, 10, 10)
+		layout.setSpacing(8)
+
+		# Top Action & Filter Row
+		top_row = QHBoxLayout()
+		lbl_search = QLabel("🔍 Filtrele:")
+		self.txt_filter = QLineEdit()
+		self.txt_filter.setPlaceholderText("İsim veya açıklama ara (örn. standoff, opt, yaw)...")
+		self.txt_filter.setClearButtonEnabled(True)
+		self.txt_filter.textChanged.connect(self._on_filter_changed)
+
+		self.btn_refresh_params = QPushButton("🔄 PX4'ten Yenile")
+		self.btn_refresh_params.setToolTip("Tüm Intercept parametrelerini PX4'ten sorgula")
+		self.btn_refresh_params.clicked.connect(self._on_refresh_params)
+
+		self.btn_save_all_params = QPushButton("💾 Tümünü PX4'e Kaydet")
+		self.btn_save_all_params.setStyleSheet("font-weight: bold;")
+		self.btn_save_all_params.setToolTip("Düzenlenen tüm parametreleri PX4'e gönderir ve saklama belleğine kaydeder")
+		self.btn_save_all_params.clicked.connect(self._on_save_all_params)
+
+		self.btn_reset_defaults = QPushButton("↩ Varsayılanlara Sıfırla")
+		self.btn_reset_defaults.setToolTip("Ekrandaki değerleri module.yaml varsayılan değerlerine sıfırlar")
+		self.btn_reset_defaults.clicked.connect(self._on_reset_defaults)
+
+		top_row.addWidget(lbl_search)
+		top_row.addWidget(self.txt_filter, 1)
+		top_row.addWidget(self.btn_refresh_params)
+		top_row.addWidget(self.btn_save_all_params)
+		top_row.addWidget(self.btn_reset_defaults)
+		layout.addLayout(top_row)
+
+		# Parameters Table
+		headers = ["Parametre", "Değer (Düzenle)", "PX4 Değeri", "Varsayılan", "Aralık", "Kısa Açıklama", "İşlem"]
+		self.table_params = QTableWidget(len(self.param_metadata), len(headers))
+		self.table_params.setHorizontalHeaderLabels(headers)
+		self.table_params.verticalHeader().setVisible(False)
+		self.table_params.setAlternatingRowColors(True)
+		self.table_params.setSelectionBehavior(QTableWidget.SelectRows)
+		self.table_params.setSelectionMode(QTableWidget.SingleSelection)
+
+		for row, (name, meta) in enumerate(self.param_metadata.items()):
+			# Col 0: Name
+			item_name = QTableWidgetItem(name)
+			font = item_name.font()
+			font.setBold(True)
+			item_name.setFont(font)
+			item_name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+			self.table_params.setItem(row, 0, item_name)
+
+			# Col 1: Editor widget
+			is_bool = (meta.get("type") == "boolean")
+			if is_bool:
+				editor = QComboBox()
+				editor.addItem("0 (Devre Dışı)")
+				editor.addItem("1 (Aktif)")
+				editor.setCurrentIndex(1 if int(meta.get("default", 1)) == 1 else 0)
+			else:
+				editor = QDoubleSpinBox()
+				editor.setDecimals(meta.get("decimal", 2))
+				min_v = meta.get("min", -999.0) if meta.get("min") is not None else -999.0
+				max_v = meta.get("max", 999.0) if meta.get("max") is not None else 999.0
+				editor.setRange(min_v, max_v)
+				editor.setSingleStep(0.1 if meta.get("decimal", 2) <= 1 else 0.05)
+				editor.setValue(float(meta.get("default", 0.0)))
+			self.param_editors[name] = editor
+			self.table_params.setCellWidget(row, 1, editor)
+
+			# Col 2: PX4 Value
+			item_px4 = QTableWidgetItem("--")
+			item_px4.setTextAlignment(Qt.AlignCenter)
+			item_px4.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+			self.param_px4_items[name] = item_px4
+			self.table_params.setItem(row, 2, item_px4)
+
+			# Col 3: Default
+			item_def = QTableWidgetItem(str(meta.get("default", "-")))
+			item_def.setTextAlignment(Qt.AlignCenter)
+			item_def.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+			self.table_params.setItem(row, 3, item_def)
+
+			# Col 4: Range
+			if meta.get("min") is not None and meta.get("max") is not None:
+				range_str = f"[{meta['min']}, {meta['max']}]"
+			else:
+				range_str = "-"
+			item_range = QTableWidgetItem(range_str)
+			item_range.setTextAlignment(Qt.AlignCenter)
+			item_range.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+			self.table_params.setItem(row, 4, item_range)
+
+			# Col 5: Short description
+			item_desc = QTableWidgetItem(meta.get("short", ""))
+			item_desc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+			self.table_params.setItem(row, 5, item_desc)
+
+			# Col 6: Save button
+			btn_save = QPushButton("Kaydet")
+			btn_save.setToolTip(f"'{name}' parametresini PX4'e gönder ve kaydet")
+			btn_save.clicked.connect(lambda checked=False, n=name: self._on_save_single_param(n))
+			self.table_params.setCellWidget(row, 6, btn_save)
+
+		# Column widths
+		header = self.table_params.horizontalHeader()
+		header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+		header.setSectionResizeMode(1, QHeaderView.Fixed)
+		self.table_params.setColumnWidth(1, 130)
+		header.setSectionResizeMode(2, QHeaderView.Fixed)
+		self.table_params.setColumnWidth(2, 95)
+		header.setSectionResizeMode(3, QHeaderView.Fixed)
+		self.table_params.setColumnWidth(3, 85)
+		header.setSectionResizeMode(4, QHeaderView.Fixed)
+		self.table_params.setColumnWidth(4, 95)
+		header.setSectionResizeMode(5, QHeaderView.Stretch)
+		header.setSectionResizeMode(6, QHeaderView.Fixed)
+		self.table_params.setColumnWidth(6, 75)
+
+		self.table_params.itemSelectionChanged.connect(self._on_table_selection_changed)
+		layout.addWidget(self.table_params, 1)
+
+		# Bottom Detail Card
+		detail_group = QGroupBox("Parametre Detayı")
+		detail_layout = QVBoxLayout(detail_group)
+		detail_layout.setSpacing(4)
+		detail_layout.setContentsMargins(10, 8, 10, 8)
+
+		self.lbl_param_title = QLabel("📌 Bir parametre seçin")
+		font_title = self.lbl_param_title.font()
+		font_title.setBold(True)
+		font_title.setPointSize(font_title.pointSize() + 1)
+		self.lbl_param_title.setFont(font_title)
+
+		self.lbl_param_meta = QLabel("Tip: - | Varsayılan: - | Aralık: - | PX4 Güncel: -")
+		self.lbl_param_short = QLabel("")
+		self.lbl_param_long = QLabel("")
+		self.lbl_param_long.setWordWrap(True)
+
+		detail_layout.addWidget(self.lbl_param_title)
+		detail_layout.addWidget(self.lbl_param_meta)
+		detail_layout.addWidget(self.lbl_param_short)
+		detail_layout.addWidget(self.lbl_param_long)
+		layout.addWidget(detail_group)
+
+		# Status Bar Row
+		status_row = QHBoxLayout()
+		self.lbl_param_status = QLabel("Hazır.")
+		self.lbl_param_count = QLabel(f"{len(self.param_metadata)} Parametre Tanımlı")
+		self.lbl_param_count.setStyleSheet("color: gray;")
+		status_row.addWidget(self.lbl_param_status, 1)
+		status_row.addWidget(self.lbl_param_count)
+		layout.addLayout(status_row)
+
+		# Select first row by default
+		if self.table_params.rowCount() > 0:
+			self.table_params.selectRow(0)
+
+	def _on_tab_changed(self, index):
+		# Auto-request params when switching to Tab 2 if connected and not yet requested
+		if index == 1 and not self._initial_params_requested and self.mav_worker.target_system is not None:
+			self._initial_params_requested = True
+			self._on_refresh_params()
+
+	def _on_filter_changed(self, text):
+		pattern = text.strip().lower()
+		for row in range(self.table_params.rowCount()):
+			name_item = self.table_params.item(row, 0)
+			if not name_item:
+				continue
+			name = name_item.text()
+			meta = self.param_metadata.get(name, {})
+			short_desc = meta.get("short", "").lower()
+			long_desc = meta.get("long", "").lower()
+			name_lower = name.lower()
+
+			match = (pattern in name_lower) or (pattern in short_desc) or (pattern in long_desc)
+			self.table_params.setRowHidden(row, not match)
+
+	def _on_table_selection_changed(self):
+		selected = self.table_params.selectedItems()
+		if not selected:
+			return
+		row = selected[0].row()
+		name_item = self.table_params.item(row, 0)
+		if name_item:
+			self._update_detail_card(name_item.text())
+
+	def _update_detail_card(self, name):
+		meta = self.param_metadata.get(name)
+		if not meta:
+			return
+		self.lbl_param_title.setText(f"📌 {name}")
+		self.lbl_param_short.setText(f"<b>Kısa Tanım:</b> {meta.get('short', '-')}")
+		self.lbl_param_long.setText(f"<b>Detaylı Açıklama:</b> {meta.get('long', '-')}")
+		px4_val = self.px4_param_values.get(name)
+		if px4_val is not None:
+			if meta.get("type") == "boolean":
+				px4_str = "1 (Aktif)" if int(px4_val) == 1 else "0 (Kapalı)"
+			else:
+				dec = meta.get("decimal", 2)
+				px4_str = f"{px4_val:.{dec}f}"
+			px4_display = f"<span style='color:#27ae60; font-weight:bold;'>{px4_str} (Senkronize)</span>"
+		else:
+			px4_display = "<span style='color:#e67e22;'>Henüz okunmadı</span>"
+
+		min_val = meta.get("min", "-")
+		max_val = meta.get("max", "-")
+		def_val = meta.get("default", "-")
+		ptype = meta.get("type", "-")
+		self.lbl_param_meta.setText(
+			f"<b>Tip:</b> {ptype} &nbsp;&nbsp;|&nbsp;&nbsp; "
+			f"<b>Varsayılan:</b> {def_val} &nbsp;&nbsp;|&nbsp;&nbsp; "
+			f"<b>Aralık:</b> [{min_val}, {max_val}] &nbsp;&nbsp;|&nbsp;&nbsp; "
+			f"<b>PX4 Güncel Değer:</b> {px4_display}"
+		)
+
+	def _on_refresh_params(self):
+		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
+			self.lbl_param_status.setText("PX4 bağlantısı henüz kurulmadı.")
+			return
+		self.lbl_param_status.setText("Parametreler PX4'ten isteniyor...")
+		for name in self.param_metadata:
+			self.mav_worker.request_param(name)
+
+	def _on_save_single_param(self, name):
+		if name not in self.param_metadata or name not in self.param_editors:
+			return
+		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
+			self.lbl_param_status.setText("Hata: PX4 bağlı değil, parametre kaydedilemedi.")
+			return
+		meta = self.param_metadata[name]
+		is_bool = (meta.get("type") == "boolean")
+		editor = self.param_editors[name]
+		if is_bool:
+			val = 1.0 if editor.currentIndex() == 1 else 0.0
+		else:
+			val = float(editor.value())
+
+		self.mav_worker.set_param(name, val, is_int=is_bool)
+		self.mav_worker.save_params_to_storage()
+		self.lbl_param_status.setText(f"'{name}' PX4'e gönderildi ({val}) ve saklama komutu iletildi.")
+
+	def _on_save_all_params(self):
+		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
+			self.lbl_param_status.setText("Hata: PX4 bağlı değil, parametreler kaydedilemedi.")
+			return
+		count = 0
+		for name, meta in self.param_metadata.items():
+			if name not in self.param_editors:
+				continue
+			is_bool = (meta.get("type") == "boolean")
+			editor = self.param_editors[name]
+			if is_bool:
+				val = 1.0 if editor.currentIndex() == 1 else 0.0
+			else:
+				val = float(editor.value())
+			self.mav_worker.set_param(name, val, is_int=is_bool)
+			count += 1
+		self.mav_worker.save_params_to_storage()
+		self.lbl_param_status.setText(f"{count} parametre PX4'e gönderildi ve saklama komutu iletildi.")
+
+	def _on_reset_defaults(self):
+		for name, meta in self.param_metadata.items():
+			if name not in self.param_editors:
+				continue
+			default_val = meta.get("default", 0)
+			is_bool = (meta.get("type") == "boolean")
+			editor = self.param_editors[name]
+			if is_bool:
+				editor.setCurrentIndex(1 if int(default_val) == 1 else 0)
+			else:
+				editor.setValue(float(default_val))
+		self.lbl_param_status.setText("Değerler varsayılanlara sıfırlandı. PX4'e kaydetmek için 'Tümünü PX4'e Kaydet'e basın.")
+
+	def on_param_received(self, name, val, ptype):
+		if name not in self.param_metadata:
+			return
+		self.px4_param_values[name] = val
+		meta = self.param_metadata[name]
+		is_bool = (meta.get("type") == "boolean")
+
+		# Update the PX4 Value column
+		if name in self.param_px4_items:
+			item = self.param_px4_items[name]
+			if is_bool:
+				text = "1 (Aktif)" if int(val) == 1 else "0 (Kapalı)"
+			else:
+				dec = meta.get("decimal", 2)
+				text = f"{val:.{dec}f}"
+			item.setText(text)
+			item.setForeground(QColor("#27ae60"))  # Green text indicating confirmed from PX4
+
+		# Update the editor widget value if not actively focused
+		if name in self.param_editors:
+			editor = self.param_editors[name]
+			if not editor.hasFocus():
+				if is_bool:
+					editor.blockSignals(True)
+					editor.setCurrentIndex(1 if int(val) == 1 else 0)
+					editor.blockSignals(False)
+				else:
+					editor.blockSignals(True)
+					editor.setValue(val)
+					editor.blockSignals(False)
+
+		if hasattr(self, "lbl_param_status"):
+			self.lbl_param_status.setText(f"'{name}' = {val} PX4'ten güncellendi.")
+		self._update_detail_card(name)
+
 	def _on_mode_selected(self, index):
 		custom_mode = self.combo_mode.itemData(index)
 		if custom_mode is not None:
@@ -507,6 +1019,11 @@ class ControlPanelWindow(QMainWindow):
 		connected = data.get("connected", False)
 		self.drone_tel["link"].setText("OK" if connected else "Lost")
 
+		# On initial PX4 connection, automatically fetch intercept parameters
+		if connected and not self._initial_params_requested:
+			self._initial_params_requested = True
+			QTimer.singleShot(600, self._on_refresh_params)
+
 		self.drone_armed = data.get("armed", False)
 		self.drone_tel["armed"].setText("Yes" if self.drone_armed else "No")
 		self.btn_arm.setText("Disarm" if self.drone_armed else "Arm")
@@ -531,6 +1048,10 @@ class ControlPanelWindow(QMainWindow):
 
 	def on_drone_message(self, text):
 		self.lbl_drone_msg.setText(text)
+		if hasattr(self, "lbl_param_status"):
+			upper = text.upper()
+			if any(k in upper for k in ("PARAM", "STORAGE", "SAVED", "REJECT", "INT_")):
+				self.lbl_param_status.setText(f"PX4: {text}")
 
 	def closeEvent(self, event):
 		self.mav_worker.stop()
@@ -539,19 +1060,38 @@ class ControlPanelWindow(QMainWindow):
 		super().closeEvent(event)
 
 	def _setup_shortcuts(self):
-		QShortcut(QKeySequence("1"), self, lambda: self.send_cmd({"mode": "straight"}))
-		QShortcut(QKeySequence("2"), self, lambda: self.send_cmd({"mode": "s_turn"}))
-		QShortcut(QKeySequence("3"), self, lambda: self.send_cmd({"mode": "orbit"}))
-		QShortcut(QKeySequence("W"), self, lambda: self._nudge_speed(2.0))
-		QShortcut(QKeySequence("S"), self, lambda: self._nudge_speed(-2.0))
+		QShortcut(QKeySequence("1"), self, lambda: self._shortcut_cmd({"mode": "straight"}))
+		QShortcut(QKeySequence("2"), self, lambda: self._shortcut_cmd({"mode": "s_turn"}))
+		QShortcut(QKeySequence("3"), self, lambda: self._shortcut_cmd({"mode": "orbit"}))
+		QShortcut(QKeySequence("W"), self, lambda: self._shortcut_speed(2.0))
+		QShortcut(QKeySequence("S"), self, lambda: self._shortcut_speed(-2.0))
 
-		# Arrow keys act like the D-pad (hold to nudge); filtered app-wide so
-		# focused sliders/buttons do not swallow them.
+		# Arrow keys act like the D-pad (hold to nudge); filtered app-wide
 		self.arrow_keys = {Qt.Key_Up: "up", Qt.Key_Down: "down", Qt.Key_Left: "left", Qt.Key_Right: "right"}
 		QApplication.instance().installEventFilter(self)
 
+	def _should_ignore_flight_shortcuts(self):
+		"""Disable flight shortcuts when navigating the parameter screen or typing in inputs."""
+		if hasattr(self, "tabs") and self.tabs.currentIndex() != 0:
+			return True
+		focus = QApplication.focusWidget()
+		if isinstance(focus, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox)):
+			return True
+		return False
+
+	def _shortcut_cmd(self, cmd_dict):
+		if not self._should_ignore_flight_shortcuts():
+			self.send_cmd(cmd_dict)
+
+	def _shortcut_speed(self, delta):
+		if not self._should_ignore_flight_shortcuts():
+			self._nudge_speed(delta)
+
 	def eventFilter(self, obj, event):
 		if event.type() in (QEvent.KeyPress, QEvent.KeyRelease) and event.key() in self.arrow_keys:
+			# Pass arrow keys to Qt table / spinbox widgets when on parameters tab
+			if self._should_ignore_flight_shortcuts():
+				return super().eventFilter(obj, event)
 			if not event.isAutoRepeat():
 				direction = self.arrow_keys[event.key()]
 				if event.type() == QEvent.KeyPress:
