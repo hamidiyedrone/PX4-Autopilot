@@ -466,17 +466,19 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Lateral visual centering: deadband corridor +/- 0.04 around screen center (0.50)
-	const float kp_lat = _param_int_kp_lat.get();
+	// Coordinated Flight: forward velocity flows primarily along Line-of-Sight.
+	// To prevent uncoordinated sideslip and roll banking at 32 m/s, lateral strafe
+	// is heavily bounded to a gentle nudge (+/- 0.8 m/s max) with deadband [0.45, 0.55].
 	float lat_err = 0.0f;
-	if (cx < 0.46f) {
-		lat_err = cx - 0.46f;
-	} else if (cx > 0.54f) {
-		lat_err = cx - 0.54f;
+	if (cx < 0.45f) {
+		lat_err = cx - 0.45f;
+	} else if (cx > 0.55f) {
+		lat_err = cx - 0.55f;
 	} else {
 		lat_err = 0.0f;
 	}
-	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -8.0f, 8.0f);
+	const float kp_lat = 1.0f;
+	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -0.8f, 0.8f);
 
 	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
 	const float right_x = -los_y_norm;
@@ -523,17 +525,23 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		vel_cmd(2) = vz_desired;
 	}
 
-	// 4. Active Seeker Yaw: point nose directly at target azimuth in world NED frame
-	// Keeps target optical axis locked in the center of the camera horizontal FOV (+/- 30 deg)
-	// Protect against zenith singularity (when directly underneath, preserve heading instead of spinning)
+	// 4. Smooth Seeker Yaw: point nose at target azimuth in world NED frame
+	// Deadband corridor on horizontal camera center (+/- 0.04 around 0.50):
+	// When target is within [0.46, 0.54], hold current heading steady to eliminate yaw hunting!
+	// When outside, turn smoothly at a gentle rate (max 18 deg/s) well within multicopter control bandwidth.
 	float desired_yaw = _last_cmd_valid ? _last_yaw_cmd : _local_pos.heading;
 	if (los_xy_norm > 0.20f && current_horiz_dist > 0.8f) {
-		desired_yaw = atan2f(los_ned(1), los_ned(0));
+		constexpr float YAW_DEADBAND_LOW = 0.46f;
+		constexpr float YAW_DEADBAND_HIGH = 0.54f;
+		if (cx < YAW_DEADBAND_LOW || cx > YAW_DEADBAND_HIGH) {
+			desired_yaw = atan2f(los_ned(1), los_ned(0));
+		}
 	}
 
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
-		const float max_dyaw = max_yaw_rate * dt;
+		// Limit maximum yaw rate to 18 deg/s in close pursuit to eliminate overshoot and phase-lag limit cycle
+		constexpr float MAX_CLOSE_YAW_RATE_RAD = math::radians(18.0f);
+		const float max_dyaw = MAX_CLOSE_YAW_RATE_RAD * dt;
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
 		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
 	} else {
