@@ -352,7 +352,7 @@
       <parent>base_link</parent>
       <child>gimbal_yaw_link</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>1 0 0</xyz>
         <limit>
           <lower>-0.7854</lower>
           <upper>0.7854</upper>

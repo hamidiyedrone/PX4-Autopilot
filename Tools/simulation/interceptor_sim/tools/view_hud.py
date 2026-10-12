@@ -691,12 +691,18 @@ def main():
 
             cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
             cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            # Relative gimbal rotation in body FLU: yaw around +Z, pitch around transverse +Y
-            R_rel = np.array([
-                [ cy * cp, -sy,  cy * sp],
-                [ sy * cp,  cy,  sy * sp],
-                [    -sp,   0.,      cp ]
+            # Relative gimbal rotation in body FLU: yaw/pan around +X, pitch/tilt around transverse +Y
+            R_x = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, cy, -sy],
+                [0.0, sy, cy]
             ])
+            R_y = np.array([
+                [ cp, 0.0, sp],
+                [0.0, 1.0, 0.0],
+                [-sp, 0.0, cp]
+            ])
+            R_rel = R_x @ R_y
 
             # Camera orientation in world frame = vehicle body attitude * gimbal relative rotation
             R_cam = R_int @ R_rel

@@ -397,43 +397,52 @@ def main():
         d_tgt_body = R_int.T @ d_tgt_world  # FLU (+x fwd, +y left, +z up nose)
         dist_tgt = float(np.linalg.norm(d_tgt_body))
 
-        # Kinematic Seeker Gimbal: Pitch-Only Active Tracking (Yaw locked to 0 boresight)
+        # Kinematic Seeker Gimbal: 2-Axis Active Tracking (Pitch & Yaw)
         if gimbal_enabled and pub_gimbal_yaw is not None and pub_gimbal_pitch is not None:
-            # 1. Yaw axis locked firmly to 0 boresight (azimuth handled by drone heading)
-            gmb_psi = 0.0
-            msg_y = Double()
-            msg_y.data = 0.0
-            pub_gimbal_yaw.publish(msg_y)
-
-            # 2. Pitch axis active tracking: points camera optical axis directly at target in body elevation plane
             if dist_tgt > 0.5:
+                # Pitch (elevation in xz plane) and Yaw (azimuth in yz plane)
                 theta_desired = float(np.clip(math.atan2(d_tgt_body[0], d_tgt_body[2]), -pitch_limit, pitch_limit))
+                psi_desired = float(np.clip(-math.atan2(d_tgt_body[1], d_tgt_body[2]), -yaw_limit, yaw_limit))
             else:
                 # Target lost: smoothly return to neutral 0 boresight
                 theta_desired = 0.0
+                psi_desired = 0.0
 
             # Enforce physical maximum angular velocity (slew-rate limiter <= 90 deg/s)
             max_delta = max_rate_rad * dt_step
             d_theta = float(np.clip(theta_desired - gmb_theta, -max_delta, max_delta))
+            d_psi = float(np.clip(psi_desired - gmb_psi, -max_delta, max_delta))
 
             # Exponential low-pass smoothing (critically damped servo response, tau ~ 0.06s)
             alpha = 1.0 - math.exp(-dt_step / 0.06)
             gmb_theta += d_theta * (0.4 + 0.6 * alpha)
+            gmb_psi += d_psi * (0.4 + 0.6 * alpha)
 
             msg_p = Double()
             msg_p.data = gmb_theta
             pub_gimbal_pitch.publish(msg_p)
 
-        # camera pose in world (strictly at drone nose, oriented by pitch gimbal angle)
+            msg_y = Double()
+            msg_y.data = gmb_psi
+            pub_gimbal_yaw.publish(msg_y)
+
+        # camera pose in world (strictly at drone nose, oriented by 2-axis gimbal angles)
         p_cam_world = p_nose_world
 
         if gimbal_enabled:
             cp, sp = math.cos(gmb_theta), math.sin(gmb_theta)
-            R_rel = np.array([
-                [ cp,  0.,  sp],
-                [ 0.,  1.,  0.],
-                [-sp,  0.,  cp]
+            cy, sy = math.cos(gmb_psi), math.sin(gmb_psi)
+            R_x = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, cy, -sy],
+                [0.0, sy, cy]
             ])
+            R_y = np.array([
+                [ cp, 0.0, sp],
+                [0.0, 1.0, 0.0],
+                [-sp, 0.0, cp]
+            ])
+            R_rel = R_x @ R_y
             R_cam = R_int @ R_rel
         else:
             R_cam = R_int
