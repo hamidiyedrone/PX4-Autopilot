@@ -130,7 +130,7 @@ def load_intercept_param_metadata():
 				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
 			},
 			"INT_TRM_KP_FWD": {
-				"name": "INT_TRM_KP_FWD", "type": "float", "default": 4.5, "min": 0.5, "max": 15.0, "decimal": 1,
+				"name": "INT_TRM_KP_FWD", "type": "float", "default": 5.5, "min": 0.5, "max": 15.0, "decimal": 1,
 				"short": "Terminal standoff distance error velocity gain",
 				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
 			},
@@ -140,17 +140,17 @@ def load_intercept_param_metadata():
 				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
 			},
 			"INT_TRM_KP_LAT": {
-				"name": "INT_TRM_KP_LAT", "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "decimal": 2,
+				"name": "INT_TRM_KP_LAT", "type": "float", "default": 0.2, "min": 0.1, "max": 5.0, "decimal": 2,
 				"short": "Terminal lateral visual tracking proportional gain",
 				"long": "Proportional gain (m/s per unit screen error) for centering target horizontally."
 			},
 			"INT_TRM_LAT_MAX": {
-				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.8, "min": 0.0, "max": 5.0, "decimal": 1,
+				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.3, "min": 0.0, "max": 5.0, "decimal": 1,
 				"short": "Terminal maximum lateral strafe speed",
 				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
 			},
 			"INT_TRM_BRK_LAT": {
-				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 5.0, "min": 0.0, "max": 10.0, "decimal": 1,
+				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0, "decimal": 1,
 				"short": "Terminal lateral cornering brake speed reduction",
 				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
 			},
