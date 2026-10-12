@@ -93,10 +93,10 @@ void GZGimbal::Run()
 
 		// Transform from PX4 FRD body angles to Gazebo model FLU joint coordinates:
 		// Gazebo roll axis: +X Forward (same sign)
-		// Gazebo pitch axis: +Y Left (opposite of FRD Right) -> negate
+		// Gazebo pitch axis: +Y Left (+pitch tilts camera down towards horizon from fuselage nose)
 		// Gazebo yaw axis: +Z Up (opposite of FRD Down) -> negate
 		const float roll_gz = _last_roll_stp;
-		const float pitch_gz = -_last_pitch_stp;
+		const float pitch_gz = _last_pitch_stp;
 		const float yaw_gz = -_last_yaw_stp;
 
 		if (_seeker_roll_cmd_publisher.Valid()) {

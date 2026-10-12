@@ -317,6 +317,15 @@ void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cm
 	// Blended feedforward acceleration
 	a_cmd = (a_cmd_apn_lat * w) + (a_cmd_rendezvous * (1.0f - w));
 
+	// Prevent violent pitch flip backwards during forward pursuit:
+	// When pursuing a forward-flying target, longitudinal deceleration along target track
+	// is clamped so the drone decelerates smoothly (max -4.5 m/s^2) without snapping backwards.
+	if (target_speed > 3.0f) {
+		const float a_long = a_cmd.dot(u_t);
+		const float a_long_clamped = math::max(a_long, -4.5f);
+		a_cmd = a_cmd + u_t * (a_long_clamped - a_long);
+	}
+
 	// Guidance Phase Update
 	if (R_v > 6.0f) {
 		_guidance_phase = GuidancePhase::APN_CRUISE;
