@@ -177,6 +177,7 @@ private:
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max,
 		(ParamFloat<px4::params::INT_KP_LAT>) _param_int_kp_lat,
 		(ParamFloat<px4::params::INT_KP_Z>) _param_int_kp_z,
+		(ParamFloat<px4::params::INT_Z_TOL>) _param_int_z_tol,
 		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
 		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate,
 		(ParamFloat<px4::params::INT_LOST_TIMEOUT>) _param_int_lost_timeout

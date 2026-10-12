@@ -66,9 +66,19 @@ parameters:
                 short: Altitude tracking proportional gain
                 long: Proportional gain (m/s per meter altitude error) for terminal standoff altitude tracking.
             type: float
-            default: 1.2
-            min: 0.2
+            default: 0.6
+            min: 0.1
             max: 5.0
+            decimal: 2
+
+        INT_Z_TOL:
+            description:
+                short: Altitude tracking deadband tolerance
+                long: Altitude deadband tolerance (+/- meters) in close pursuit to prevent optical pitch oscillations.
+            type: float
+            default: 0.3
+            min: 0.05
+            max: 1.0
             decimal: 2
 
         INT_KP_Z_APP:

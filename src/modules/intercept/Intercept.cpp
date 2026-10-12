@@ -486,29 +486,29 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		vel_cmd(1) = desired_vy;
 	}
 
-	// Vertical altitude tracking with deadband corridor (+/- 0.15m)
+	// Vertical altitude tracking with deadband corridor (+/- 0.30m)
 	// Computes physical altitude difference directly from optical line-of-sight elevation and metric distance:
 	const float delta_z = current_dist * los_ned(2); // In NED: negative = target is higher (climb), positive = lower
 
-	constexpr float Z_TOL = 0.15f; // +/- 15 cm deadband corridor
+	const float z_tol = _param_int_z_tol.get(); // default 0.3m (+/- 30 cm deadband corridor)
 	float delta_z_corr = 0.0f;
-	if (delta_z < -Z_TOL) {
-		delta_z_corr = delta_z + Z_TOL; // target higher (NED negative) -> climb
-	} else if (delta_z > Z_TOL) {
-		delta_z_corr = delta_z - Z_TOL; // target lower (NED positive) -> descend
+	if (delta_z < -z_tol) {
+		delta_z_corr = delta_z + z_tol; // target higher (NED negative) -> climb
+	} else if (delta_z > z_tol) {
+		delta_z_corr = delta_z - z_tol; // target lower (NED positive) -> descend
 	} else {
-		delta_z_corr = 0.0f; // within +/- 15cm corridor -> hold level flight!
+		delta_z_corr = 0.0f; // within +/- corridor -> hold level flight!
 	}
 
-	const float kp_z = _param_int_kp_z.get();
+	const float kp_z = _param_int_kp_z.get(); // default 0.6
 	float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
 	if (fabsf(delta_z_corr) < FLT_EPSILON) {
 		vz_desired = 0.0f;
 	}
 
-	// Slew-rate limit vertical acceleration (max 1.5 m/s^2) to prevent pitch oscillations
+	// Slew-rate limit vertical acceleration (max 1.2 m/s^2) to prevent pitch oscillations
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dvz = 1.5f * dt;
+		const float max_dvz = 1.2f * dt;
 		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
 	} else {
 		vel_cmd(2) = vz_desired;
