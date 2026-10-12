@@ -520,7 +520,7 @@ def sdf(g):
       <parent>base_link</parent>
       <child>gimbal_yaw_link</child>
       <axis>
-        <xyz>1 0 0</xyz>
+        <xyz>0 0 1</xyz>
         <limit>
           <lower>{-yaw_lim:.4f}</lower>
           <upper>{yaw_lim:.4f}</upper>

@@ -334,6 +334,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 {
 	const hrt_abstime now = hrt_absolute_time();
 
+	const float cx = _target_detection.bbox[0]; // [0.0, 1.0], center is 0.50
+
 	// Compute time step for optical derivative estimation
 	float dt = 0.033f; // default 30 Hz
 	if (_last_visual_time > 0 && now > _last_visual_time) {
@@ -427,21 +429,16 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Clamp commanded velocity delta to prevent abrupt pitch swings
 	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
 
-	// Physical metric lateral distance (m) perpendicular to drone heading:
-	// In vehicle body FRD frame, los_body(1) is the lateral component (+ = right, - = left).
-	// Target lateral displacement from drone centerline:
-	const float current_lat_dist = current_range * los_body(1);
-
 	// Adaptive lateral corner/swerve braking when close (< 5m):
-	// If the target shifts laterally, brake forward speed
+	// If the target shifts laterally away from boresight center, brake forward speed
 	// to tighten turn radius and prevent overshooting / cutting past the target.
 	float corner_brake = 0.0f;
 	if (current_range < 5.0f) {
-		const float lat_mag = fabsf(current_lat_dist);
-		constexpr float LAT_BRAKE_DEADBAND = 0.40f; // 40 cm deadband corridor
-		if (lat_mag > LAT_BRAKE_DEADBAND) {
-			const float lat_drift = lat_mag - LAT_BRAKE_DEADBAND;
-			corner_brake = math::constrain(lat_drift * 4.0f, 0.0f, 5.0f);
+		const float lat_offset = fabsf(cx - 0.50f);
+		constexpr float LAT_BRAKE_DEADBAND = 0.08f; // center corridor [0.42, 0.58]
+		if (lat_offset > LAT_BRAKE_DEADBAND) {
+			const float lat_drift = lat_offset - LAT_BRAKE_DEADBAND;
+			corner_brake = math::constrain(lat_drift * 15.0f, 0.0f, 5.0f);
 		}
 	}
 
@@ -469,20 +466,17 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Metric lateral distance zeroing: deadband corridor +/- 0.15m (+/- 15 cm) around target centerline
-	constexpr float LAT_TOL_M = 0.15f;
-	float lat_dist_corr = 0.0f;
-	if (current_lat_dist > LAT_TOL_M) {
-		lat_dist_corr = current_lat_dist - LAT_TOL_M;
-	} else if (current_lat_dist < -LAT_TOL_M) {
-		lat_dist_corr = current_lat_dist + LAT_TOL_M;
-	} else {
-		lat_dist_corr = 0.0f;
-	}
-
+	// Lateral visual centering: deadband corridor +/- 0.04 around screen center (0.50)
 	const float kp_lat = _param_int_kp_lat.get();
-	// Limit lateral correction velocity to +/- 2.5 m/s to prevent unnatural excessive roll banking
-	const float vel_lat_corr = math::constrain(lat_dist_corr * kp_lat, -2.5f, 2.5f);
+	float lat_err = 0.0f;
+	if (cx < 0.46f) {
+		lat_err = cx - 0.46f;
+	} else if (cx > 0.54f) {
+		lat_err = cx - 0.54f;
+	} else {
+		lat_err = 0.0f;
+	}
+	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -8.0f, 8.0f);
 
 	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
 	const float right_x = -los_y_norm;
@@ -529,25 +523,16 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		vel_cmd(2) = vz_desired;
 	}
 
-	// 4. Gimbal Centering Yaw: align drone heading smoothly with target azimuth
-	// The 2-axis gimbal tracks the target optical axis at high bandwidth (50 Hz).
-	// The drone airframe only needs to gently slave its heading to target azimuth
-	// to keep the gimbal centered around neutral boresight (+/- 45 deg range).
-	// Inside the deadband corridor (+/- 4 deg), heading is held steady to eliminate yaw hunting!
+	// 4. Active Seeker Yaw: point nose directly at target azimuth in world NED frame
+	// Keeps target optical axis locked in the center of the camera horizontal FOV (+/- 30 deg)
+	// Protect against zenith singularity (when directly underneath, preserve heading instead of spinning)
 	float desired_yaw = _last_cmd_valid ? _last_yaw_cmd : _local_pos.heading;
 	if (los_xy_norm > 0.20f && current_horiz_dist > 0.8f) {
-		const float target_azimuth = atan2f(los_ned(1), los_ned(0));
-		const float heading_err = matrix::wrap_pi(target_azimuth - desired_yaw);
-		constexpr float YAW_DEADBAND = math::radians(4.0f); // +/- 4 deg gimbal absorption corridor
-		if (fabsf(heading_err) > YAW_DEADBAND) {
-			const float heading_err_corr = (heading_err > 0.0f) ? (heading_err - YAW_DEADBAND) : (heading_err + YAW_DEADBAND);
-			desired_yaw = matrix::wrap_pi(desired_yaw + heading_err_corr);
-		}
+		desired_yaw = atan2f(los_ned(1), los_ned(0));
 	}
 
 	if (_last_cmd_valid && dt > 0.005f) {
-		// Slew-rate limit heading change (max 25 deg/s for silky smooth, non-oscillating coordinated turn)
-		const float max_yaw_rate = math::radians(math::min(_param_int_yaw_rate.get(), 25.0f));
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
 		const float max_dyaw = max_yaw_rate * dt;
 		const float yaw_err = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
 		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(yaw_err, -max_dyaw, max_dyaw));
