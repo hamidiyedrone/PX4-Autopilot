@@ -13,11 +13,11 @@ Tab 1: Flight Control
   - Arm/Disarm, Takeoff
   - Live telemetry and the latest PX4 status text / command rejection
 
-Tab 2: Intercept Mode Parameters (INT_*)
+Tab 2: Parameters (INT_*)
 - Live synchronization with PX4 via MAVLink (PARAM_REQUEST_READ / PARAM_VALUE / PARAM_SET)
-- Edit individual parameters or save all to PX4 and persistent storage
+- Edit parameters and save all to PX4 and persistent storage
 - View default values, min/max allowable ranges, and full documentation from module.yaml
-- Search/filter parameters in real-time
+- Real-time search/filter bar
 
 Connects to target_sim.py HTTP API at http://localhost:8000 and to the PX4 GCS link
 (udp 14550) as the ground station, so QGroundControl cannot run at the same time.
@@ -429,9 +429,9 @@ class ControlPanelWindow(QMainWindow):
 		self.target_alt = 100.0
 		self.target_heading = 0.0
 
-		self.setWindowTitle("Interceptor Sim - Control Panel")
-		self.resize(960, 620)
-		self.setMinimumSize(880, 520)
+		self.setWindowTitle("Control Panel")
+		self.resize(900, 560)
+		self.setMinimumSize(820, 480)
 
 		# Parameter management state
 		self.param_metadata = load_intercept_param_metadata()
@@ -531,7 +531,7 @@ class ControlPanelWindow(QMainWindow):
 			grid.addWidget(b, row, col)
 
 		# 3. Speed & Altitude Setpoints
-		set_group = QGroupBox("Speed && Altitude")
+		set_group = QGroupBox("Speed & Altitude")
 		set_layout = QVBoxLayout(set_group)
 		set_layout.setSpacing(4)
 
@@ -617,12 +617,12 @@ class ControlPanelWindow(QMainWindow):
 		main_layout.addWidget(telem_group)
 		main_layout.addStretch()
 
-		self.tabs.addTab(flight_tab, "🎮 Uçuş Kontrol")
+		self.tabs.addTab(flight_tab, "Flight Control")
 
 		# Tab 2: Intercept Parameters
 		params_tab = QWidget()
 		self._init_params_ui(params_tab)
-		self.tabs.addTab(params_tab, "⚙ Parametreler (Intercept)")
+		self.tabs.addTab(params_tab, "Parameters")
 
 		self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -688,23 +688,23 @@ class ControlPanelWindow(QMainWindow):
 
 		# Top Action & Filter Row
 		top_row = QHBoxLayout()
-		lbl_search = QLabel("🔍 Filtrele:")
+		lbl_search = QLabel("Filter:")
 		self.txt_filter = QLineEdit()
-		self.txt_filter.setPlaceholderText("İsim veya açıklama ara (örn. standoff, opt, yaw)...")
+		self.txt_filter.setPlaceholderText("Search by name or description...")
 		self.txt_filter.setClearButtonEnabled(True)
 		self.txt_filter.textChanged.connect(self._on_filter_changed)
 
-		self.btn_refresh_params = QPushButton("🔄 PX4'ten Yenile")
-		self.btn_refresh_params.setToolTip("Tüm Intercept parametrelerini PX4'ten sorgula")
+		self.btn_refresh_params = QPushButton("Refresh")
+		self.btn_refresh_params.setToolTip("Fetch all intercept parameters from PX4")
 		self.btn_refresh_params.clicked.connect(self._on_refresh_params)
 
-		self.btn_save_all_params = QPushButton("💾 Tümünü PX4'e Kaydet")
+		self.btn_save_all_params = QPushButton("Save")
 		self.btn_save_all_params.setStyleSheet("font-weight: bold;")
-		self.btn_save_all_params.setToolTip("Düzenlenen tüm parametreleri PX4'e gönderir ve saklama belleğine kaydeder")
+		self.btn_save_all_params.setToolTip("Send all parameters to PX4 and persist to storage")
 		self.btn_save_all_params.clicked.connect(self._on_save_all_params)
 
-		self.btn_reset_defaults = QPushButton("↩ Varsayılanlara Sıfırla")
-		self.btn_reset_defaults.setToolTip("Ekrandaki değerleri module.yaml varsayılan değerlerine sıfırlar")
+		self.btn_reset_defaults = QPushButton("Reset Defaults")
+		self.btn_reset_defaults.setToolTip("Reset all values to module.yaml defaults")
 		self.btn_reset_defaults.clicked.connect(self._on_reset_defaults)
 
 		top_row.addWidget(lbl_search)
@@ -715,7 +715,7 @@ class ControlPanelWindow(QMainWindow):
 		layout.addLayout(top_row)
 
 		# Parameters Table
-		headers = ["Parametre", "Değer (Düzenle)", "PX4 Değeri", "Varsayılan", "Aralık", "Kısa Açıklama", "İşlem"]
+		headers = ["Parameter", "Value", "PX4 Value", "Default", "Range", "Description"]
 		self.table_params = QTableWidget(len(self.param_metadata), len(headers))
 		self.table_params.setHorizontalHeaderLabels(headers)
 		self.table_params.verticalHeader().setVisible(False)
@@ -736,8 +736,8 @@ class ControlPanelWindow(QMainWindow):
 			is_bool = (meta.get("type") == "boolean")
 			if is_bool:
 				editor = QComboBox()
-				editor.addItem("0 (Devre Dışı)")
-				editor.addItem("1 (Aktif)")
+				editor.addItem("0 (Disabled)")
+				editor.addItem("1 (Enabled)")
 				editor.setCurrentIndex(1 if int(meta.get("default", 1)) == 1 else 0)
 			else:
 				editor = QDoubleSpinBox()
@@ -773,16 +773,11 @@ class ControlPanelWindow(QMainWindow):
 			item_range.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
 			self.table_params.setItem(row, 4, item_range)
 
-			# Col 5: Short description
+			# Col 5: Description
 			item_desc = QTableWidgetItem(meta.get("short", ""))
+			item_desc.setToolTip(meta.get("long", meta.get("short", "")))
 			item_desc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
 			self.table_params.setItem(row, 5, item_desc)
-
-			# Col 6: Save button
-			btn_save = QPushButton("Kaydet")
-			btn_save.setToolTip(f"'{name}' parametresini PX4'e gönder ve kaydet")
-			btn_save.clicked.connect(lambda checked=False, n=name: self._on_save_single_param(n))
-			self.table_params.setCellWidget(row, 6, btn_save)
 
 		# Column widths
 		header = self.table_params.horizontalHeader()
@@ -790,53 +785,23 @@ class ControlPanelWindow(QMainWindow):
 		header.setSectionResizeMode(1, QHeaderView.Fixed)
 		self.table_params.setColumnWidth(1, 130)
 		header.setSectionResizeMode(2, QHeaderView.Fixed)
-		self.table_params.setColumnWidth(2, 95)
+		self.table_params.setColumnWidth(2, 105)
 		header.setSectionResizeMode(3, QHeaderView.Fixed)
 		self.table_params.setColumnWidth(3, 85)
 		header.setSectionResizeMode(4, QHeaderView.Fixed)
 		self.table_params.setColumnWidth(4, 95)
 		header.setSectionResizeMode(5, QHeaderView.Stretch)
-		header.setSectionResizeMode(6, QHeaderView.Fixed)
-		self.table_params.setColumnWidth(6, 75)
 
-		self.table_params.itemSelectionChanged.connect(self._on_table_selection_changed)
 		layout.addWidget(self.table_params, 1)
-
-		# Bottom Detail Card
-		detail_group = QGroupBox("Parametre Detayı")
-		detail_layout = QVBoxLayout(detail_group)
-		detail_layout.setSpacing(4)
-		detail_layout.setContentsMargins(10, 8, 10, 8)
-
-		self.lbl_param_title = QLabel("📌 Bir parametre seçin")
-		font_title = self.lbl_param_title.font()
-		font_title.setBold(True)
-		font_title.setPointSize(font_title.pointSize() + 1)
-		self.lbl_param_title.setFont(font_title)
-
-		self.lbl_param_meta = QLabel("Tip: - | Varsayılan: - | Aralık: - | PX4 Güncel: -")
-		self.lbl_param_short = QLabel("")
-		self.lbl_param_long = QLabel("")
-		self.lbl_param_long.setWordWrap(True)
-
-		detail_layout.addWidget(self.lbl_param_title)
-		detail_layout.addWidget(self.lbl_param_meta)
-		detail_layout.addWidget(self.lbl_param_short)
-		detail_layout.addWidget(self.lbl_param_long)
-		layout.addWidget(detail_group)
 
 		# Status Bar Row
 		status_row = QHBoxLayout()
-		self.lbl_param_status = QLabel("Hazır.")
-		self.lbl_param_count = QLabel(f"{len(self.param_metadata)} Parametre Tanımlı")
+		self.lbl_param_status = QLabel("Ready.")
+		self.lbl_param_count = QLabel(f"{len(self.param_metadata)} parameters")
 		self.lbl_param_count.setStyleSheet("color: gray;")
 		status_row.addWidget(self.lbl_param_status, 1)
 		status_row.addWidget(self.lbl_param_count)
 		layout.addLayout(status_row)
-
-		# Select first row by default
-		if self.table_params.rowCount() > 0:
-			self.table_params.selectRow(0)
 
 	def _on_tab_changed(self, index):
 		# Auto-request params when switching to Tab 2 if connected and not yet requested
@@ -859,73 +824,17 @@ class ControlPanelWindow(QMainWindow):
 			match = (pattern in name_lower) or (pattern in short_desc) or (pattern in long_desc)
 			self.table_params.setRowHidden(row, not match)
 
-	def _on_table_selection_changed(self):
-		selected = self.table_params.selectedItems()
-		if not selected:
-			return
-		row = selected[0].row()
-		name_item = self.table_params.item(row, 0)
-		if name_item:
-			self._update_detail_card(name_item.text())
-
-	def _update_detail_card(self, name):
-		meta = self.param_metadata.get(name)
-		if not meta:
-			return
-		self.lbl_param_title.setText(f"📌 {name}")
-		self.lbl_param_short.setText(f"<b>Kısa Tanım:</b> {meta.get('short', '-')}")
-		self.lbl_param_long.setText(f"<b>Detaylı Açıklama:</b> {meta.get('long', '-')}")
-		px4_val = self.px4_param_values.get(name)
-		if px4_val is not None:
-			if meta.get("type") == "boolean":
-				px4_str = "1 (Aktif)" if int(px4_val) == 1 else "0 (Kapalı)"
-			else:
-				dec = meta.get("decimal", 2)
-				px4_str = f"{px4_val:.{dec}f}"
-			px4_display = f"<span style='color:#27ae60; font-weight:bold;'>{px4_str} (Senkronize)</span>"
-		else:
-			px4_display = "<span style='color:#e67e22;'>Henüz okunmadı</span>"
-
-		min_val = meta.get("min", "-")
-		max_val = meta.get("max", "-")
-		def_val = meta.get("default", "-")
-		ptype = meta.get("type", "-")
-		self.lbl_param_meta.setText(
-			f"<b>Tip:</b> {ptype} &nbsp;&nbsp;|&nbsp;&nbsp; "
-			f"<b>Varsayılan:</b> {def_val} &nbsp;&nbsp;|&nbsp;&nbsp; "
-			f"<b>Aralık:</b> [{min_val}, {max_val}] &nbsp;&nbsp;|&nbsp;&nbsp; "
-			f"<b>PX4 Güncel Değer:</b> {px4_display}"
-		)
-
 	def _on_refresh_params(self):
 		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
-			self.lbl_param_status.setText("PX4 bağlantısı henüz kurulmadı.")
+			self.lbl_param_status.setText("PX4 is not connected yet.")
 			return
-		self.lbl_param_status.setText("Parametreler PX4'ten isteniyor...")
+		self.lbl_param_status.setText("Requesting parameters from PX4...")
 		for name in self.param_metadata:
 			self.mav_worker.request_param(name)
 
-	def _on_save_single_param(self, name):
-		if name not in self.param_metadata or name not in self.param_editors:
-			return
-		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
-			self.lbl_param_status.setText("Hata: PX4 bağlı değil, parametre kaydedilemedi.")
-			return
-		meta = self.param_metadata[name]
-		is_bool = (meta.get("type") == "boolean")
-		editor = self.param_editors[name]
-		if is_bool:
-			val = 1.0 if editor.currentIndex() == 1 else 0.0
-		else:
-			val = float(editor.value())
-
-		self.mav_worker.set_param(name, val, is_int=is_bool)
-		self.mav_worker.save_params_to_storage()
-		self.lbl_param_status.setText(f"'{name}' PX4'e gönderildi ({val}) ve saklama komutu iletildi.")
-
 	def _on_save_all_params(self):
 		if self.mav_worker.conn is None or self.mav_worker.target_system is None:
-			self.lbl_param_status.setText("Hata: PX4 bağlı değil, parametreler kaydedilemedi.")
+			self.lbl_param_status.setText("Error: PX4 is not connected, unable to save.")
 			return
 		count = 0
 		for name, meta in self.param_metadata.items():
@@ -940,7 +849,7 @@ class ControlPanelWindow(QMainWindow):
 			self.mav_worker.set_param(name, val, is_int=is_bool)
 			count += 1
 		self.mav_worker.save_params_to_storage()
-		self.lbl_param_status.setText(f"{count} parametre PX4'e gönderildi ve saklama komutu iletildi.")
+		self.lbl_param_status.setText(f"{count} parameters sent to PX4 and saved.")
 
 	def _on_reset_defaults(self):
 		for name, meta in self.param_metadata.items():
@@ -953,7 +862,7 @@ class ControlPanelWindow(QMainWindow):
 				editor.setCurrentIndex(1 if int(default_val) == 1 else 0)
 			else:
 				editor.setValue(float(default_val))
-		self.lbl_param_status.setText("Değerler varsayılanlara sıfırlandı. PX4'e kaydetmek için 'Tümünü PX4'e Kaydet'e basın.")
+		self.lbl_param_status.setText("Values reset to defaults. Click 'Save' to apply to PX4.")
 
 	def on_param_received(self, name, val, ptype):
 		if name not in self.param_metadata:
@@ -966,7 +875,7 @@ class ControlPanelWindow(QMainWindow):
 		if name in self.param_px4_items:
 			item = self.param_px4_items[name]
 			if is_bool:
-				text = "1 (Aktif)" if int(val) == 1 else "0 (Kapalı)"
+				text = "1 (Enabled)" if int(val) == 1 else "0 (Disabled)"
 			else:
 				dec = meta.get("decimal", 2)
 				text = f"{val:.{dec}f}"
@@ -987,8 +896,7 @@ class ControlPanelWindow(QMainWindow):
 					editor.blockSignals(False)
 
 		if hasattr(self, "lbl_param_status"):
-			self.lbl_param_status.setText(f"'{name}' = {val} PX4'ten güncellendi.")
-		self._update_detail_card(name)
+			self.lbl_param_status.setText(f"'{name}' = {val} updated from PX4.")
 
 	def _on_mode_selected(self, index):
 		custom_mode = self.combo_mode.itemData(index)
