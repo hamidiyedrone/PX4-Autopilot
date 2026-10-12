@@ -484,7 +484,7 @@ def draw_hud(img, tracking_data, width, height):
         return
 
     range_m = tracking_data.get("range_m")
-    if range_m is None or range_m > 50.0:
+    if range_m is None or range_m > 75.0:
         return
 
     u_c = int(tracking_data["u_centre"])
@@ -531,7 +531,7 @@ def main():
     ap.add_argument("--world", default="ankara")
     ap.add_argument("--interceptor", default="interceptor_0")
     ap.add_argument("--target", default="talon1718_1")
-    ap.add_argument("--max-range", type=float, default=50.0)
+    ap.add_argument("--max-range", type=float, default=75.0)
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14551", help="PX4 HUD link (see the airframe .post)")
     ap.add_argument("extra_args", nargs="*", help="Optional extra arguments (e.g. port)")
     a = ap.parse_args()
@@ -556,8 +556,9 @@ def main():
     for name, comp in components.items():
         total_mass += comp["mass"]
         cg_num += comp["mass"] * comp["z"]
+    cg_num += cfg["fuselage"]["mass"] * fus_len / 2
     cg = cg_num / total_mass
-    cam_offset_x = cfg.get("camera", {}).get("offset_x", 0.038)
+    cam_offset_x = cfg.get("camera", {}).get("offset_x", -0.038)
     ped_h = cfg.get("gimbal", {}).get("pedestal_height", 0.030)
     cam_offset_body = np.array([cam_offset_x, 0.0, (fus_len - cg) + ped_h + 0.094])
 
@@ -586,6 +587,8 @@ def main():
         for p in msg.pose:
             if p.name in (a.interceptor, a.target):
                 state["poses"][p.name] = p
+            elif "gimbal_pitch_link" in p.name:
+                state["poses"]["gimbal_pitch_link"] = p
 
     def on_gmb_yaw(msg):
         state["gmb_yaw"] = msg.data
@@ -684,10 +687,6 @@ def main():
             R_int = quat_to_rot(pi.orientation.w, pi.orientation.x, pi.orientation.y, pi.orientation.z)
             p_int = np.array([pi.position.x, pi.position.y, pi.position.z])
 
-            # Camera position is always at the interceptor nose in world frame
-            p_cam_world = p_int + R_int @ cam_offset_body
-
-            # Gimbal camera orientation from commanded seeker pitch and yaw angles
             pitch_rad = float(state.get("gmb_pitch", 0.0))
             yaw_rad = float(state.get("gmb_yaw", 0.0))
             pitch_deg = math.degrees(pitch_rad)
@@ -699,17 +698,25 @@ def main():
                 "barrel": math.degrees(float(state.get("barrel_pitch", 0.0))),
             }
 
-            cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
-            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            # Relative gimbal rotation in body FLU: yaw around +Z, pitch around transverse +Y
-            R_rel = np.array([
-                [ cy * cp, -sy,  cy * sp],
-                [ sy * cp,  cy,  sy * sp],
-                [    -sp,   0.,      cp ]
-            ])
-
-            # Camera orientation in world frame = vehicle body attitude * gimbal relative rotation
-            R_cam = R_int @ R_rel
+            # Camera pose in world: determined by physical gimbal link or commanded angles
+            pg = state["poses"].get("gimbal_pitch_link")
+            if pg is not None:
+                R_link_rel = quat_to_rot(pg.orientation.w, pg.orientation.x,
+                                         pg.orientation.y, pg.orientation.z)
+                p_link_rel = np.array([pg.position.x, pg.position.y, pg.position.z])
+                R_cam = R_int @ R_link_rel
+                p_cam_world = p_int + R_int @ (p_link_rel + R_link_rel @ np.array([0., 0., 0.033]))
+            else:
+                cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
+                cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+                # Kinematic chain: Joint 2 yaw around -X; Joint 3 pitch around +Y
+                R_rel = np.array([
+                    [ cp,            0.,   sp          ],
+                    [-sy * sp,       cy,   sy * cp     ],
+                    [-cy * sp,      -sy,   cy * cp     ]
+                ])
+                R_cam = R_int @ R_rel
+                p_cam_world = p_int + R_int @ cam_offset_body
 
             # Camera optical frame in world (takes world vectors into camera optical coords)
             R_cam_opt_world = GZ_TO_OPT @ R_cam_gz_body @ R_cam.T

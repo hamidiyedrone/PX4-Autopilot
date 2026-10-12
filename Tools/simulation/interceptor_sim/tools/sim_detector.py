@@ -208,7 +208,7 @@ def main():
         cg_num += comp["mass"] * comp["z"]
     cg_num += cfg["fuselage"]["mass"] * fus_len / 2
     cg = cg_num / total_mass
-    cam_offset_x = cfg.get("camera", {}).get("offset_x", 0.038)
+    cam_offset_x = cfg.get("camera", {}).get("offset_x", -0.038)
     ped_h = cfg.get("gimbal", {}).get("pedestal_height", 0.030)
     cam_offset_body = np.array([cam_offset_x, 0.0, (fus_len - cg) + ped_h + 0.094])  # nose camera on Storm32 gimbal in body FLU (z up)
 
@@ -323,22 +323,25 @@ def main():
         # Camera pose in world: determined by physical gimbal link or commanded angles
         p_gmb = state["poses"].get("gimbal_pitch_link")
         if gimbal_enabled and p_gmb is not None:
-            R_cam = quat_to_rot(p_gmb.orientation.w, p_gmb.orientation.x,
-                                p_gmb.orientation.y, p_gmb.orientation.z)
-            p_cam_world = np.array([p_gmb.position.x, p_gmb.position.y, p_gmb.position.z])
+            R_link_rel = quat_to_rot(p_gmb.orientation.w, p_gmb.orientation.x,
+                                     p_gmb.orientation.y, p_gmb.orientation.z)
+            p_link_rel = np.array([p_gmb.position.x, p_gmb.position.y, p_gmb.position.z])
+            R_cam = R_int @ R_link_rel
+            p_cam_world = p_int + R_int @ (p_link_rel + R_link_rel @ np.array([0., 0., 0.033]))
         elif gimbal_enabled:
             # Reconstruct from commanded joint angles in body FLU
+            # Kinematic chain: Joint 2 yaw around -X; Joint 3 pitch around +Y
             gmb_psi = gmb_angles.get("yaw", 0.0)
             gmb_theta = gmb_angles.get("pitch", 0.0)
             cp, sp = math.cos(gmb_theta), math.sin(gmb_theta)
             cy, sy = math.cos(gmb_psi), math.sin(gmb_psi)
             R_rel = np.array([
-                [ cy * cp, -sy,  cy * sp],
-                [ sy * cp,  cy,  sy * sp],
-                [    -sp,   0.,      cp ]
+                [ cp,            0.,   sp          ],
+                [-sy * sp,       cy,   sy * cp     ],
+                [-cy * sp,      -sy,   cy * cp     ]
             ])
             R_cam = R_int @ R_rel
-            p_cam_world = p_nose_world
+            p_cam_world = p_int + R_int @ cam_offset_body
         else:
             R_cam = R_int
             p_cam_world = p_nose_world
