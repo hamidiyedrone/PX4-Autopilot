@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import math
+import re
 import json
 import csv
 import glob
@@ -334,12 +335,22 @@ class TelemetryRecorder:
                     parts = line.split(",")
                     self.target_source = parts[0].split(":")[-1].strip()
                 if "Target Distance:" in line:
-                    parts = line.split(",")
-                    if len(parts) >= 3:
+                    m_tgt = re.search(r"Target Distance:\s*([0-9\.\-]+)\s*m", line)
+                    if m_tgt:
                         try:
-                            self.target_rt = float(parts[0].split(":")[-1].split("m")[0].strip())
-                            self.basket_rv = float(parts[1].split(":")[-1].split("m")[0].strip())
-                            self.closing_vc = float(parts[2].split(":")[-1].split("m")[0].strip())
+                            self.target_rt = float(m_tgt.group(1))
+                        except ValueError:
+                            pass
+                    m_rv = re.search(r"Basket Dist R_v:\s*([0-9\.\-]+)\s*m", line)
+                    if m_rv:
+                        try:
+                            self.basket_rv = float(m_rv.group(1))
+                        except ValueError:
+                            pass
+                    m_vc = re.search(r"V_c:\s*([0-9\.\-]+)\s*m/s", line)
+                    if m_vc:
+                        try:
+                            self.closing_vc = float(m_vc.group(1))
                         except ValueError:
                             pass
                 if "Net Gun Status:" in line:
@@ -377,6 +388,26 @@ class TelemetryRecorder:
                 if not p_int or not p_tgt:
                     continue
 
+                # Compute Gazebo Ground-Truth Distances & Closing Speed
+                p_diff = p_tgt["pos"] - p_int["pos"]
+                target_dist_gt = float(np.linalg.norm(p_diff))
+                v_tgt = p_tgt["vel"]
+                v_tgt_spd = float(np.linalg.norm(v_tgt))
+                if v_tgt_spd > 0.5:
+                    u_tgt = v_tgt / v_tgt_spd
+                    p_basket = p_tgt["pos"] - 2.5 * u_tgt
+                    basket_dist_gt = float(np.linalg.norm(p_basket - p_int["pos"]))
+                else:
+                    basket_dist_gt = target_dist_gt
+
+                v_rel = p_tgt["vel"] - p_int["vel"]
+                closing_vc_gt = -float(np.dot(v_rel, p_diff)) / max(0.1, target_dist_gt)
+
+                # Use PX4 estimated value if available, else ground-truth
+                eff_rv = self.basket_rv if self.basket_rv < 500.0 else basket_dist_gt
+                eff_rt = self.target_rt if self.target_rt < 500.0 else target_dist_gt
+                eff_vc = self.closing_vc if abs(self.closing_vc) > 0.01 else closing_vc_gt
+
                 # Euler angles from quaternions
                 def q2rpy(q):
                     sr_cp = 2.0 * (q[0] * q[1] + q[2] * q[3])
@@ -409,9 +440,9 @@ class TelemetryRecorder:
                     "tgt_pos_e": round(float(p_tgt["pos"][0]), 3),
                     "tgt_pos_d": round(float(-p_tgt["pos"][2]), 3),
                     "tgt_speed": round(float(np.linalg.norm(p_tgt["vel"])), 2),
-                    "basket_dist_rv": round(self.basket_rv, 2),
-                    "target_dist_rt": round(self.target_rt, 2),
-                    "closing_speed_vc": round(self.closing_vc, 2),
+                    "basket_dist_rv": round(eff_rv, 2),
+                    "target_dist_rt": round(eff_rt, 2),
+                    "closing_speed_vc": round(eff_vc, 2),
                     "cmd_acc_norm": round(float(np.linalg.norm(self.cmd_acc)), 2),
                     "cmd_gmb_pitch_deg": round(math.degrees(self.cmd_gmb_pitch), 1),
                     "cmd_gmb_yaw_deg": round(math.degrees(self.cmd_gmb_yaw), 1),
@@ -473,7 +504,7 @@ class TelemetryRecorder:
         }
 
 
-def execute_single_run(scen, max_duration=75.0):
+def execute_single_run(scen, max_duration=115.0):
     run_id = scen["id"]
     name = scen["name"]
     print(f"\n{'='*80}")
@@ -533,7 +564,23 @@ def execute_single_run(scen, max_duration=75.0):
     run_px4_cmd("commander", "arm")
     time.sleep(0.5)
     run_px4_cmd("commander", "takeoff")
-    time.sleep(4.0)
+    # Wait for vehicle to lift off and reach safe altitude (> 2.0m)
+    for _ in range(15):
+        lp_out = run_px4_cmd("listener", "vehicle_local_position")
+        climbing = False
+        for line in lp_out.splitlines():
+            if line.strip().startswith("z:"):
+                try:
+                    z_val = float(line.split(":")[-1].strip())
+                    if z_val < -2.0:
+                        climbing = True
+                        break
+                except ValueError:
+                    pass
+        if climbing:
+            time.sleep(1.0)
+            break
+        time.sleep(1.0)
     run_px4_cmd("commander", "mode", "ext1")
 
     # 6. Pursuit & Dynamic Maneuver Execution
@@ -552,12 +599,20 @@ def execute_single_run(scen, max_duration=75.0):
             send_target_http_cmd(cmd)
 
         # Check net gun fired
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE, "r") as f:
-                if ">>> NET GUN FIRED!" in f.read():
-                    fired = True
+        if not fired:
+            if rec.net_fired:
+                fired = True
+                t_fired = time.time()
+            elif os.path.exists(LOG_FILE):
+                try:
+                    with open(LOG_FILE, "r") as f:
+                        if ">>> NET GUN FIRED!" in f.read():
+                            fired = True
+                            t_fired = time.time()
+                except Exception:
+                    pass
 
-        if fired and (t_el >= 35.0 or t_el >= max_duration):
+        if fired and (time.time() - t_fired >= 4.0):
             break
 
         time.sleep(1.0)
@@ -645,7 +700,7 @@ def main():
     parser.add_argument("--range", type=str, help="Belirli bir koşu aralığını çalıştırır (örn: 1-5 veya 10-15)")
     parser.add_argument("--group", choices=["speed", "weave", "turn", "vertical", "throttle", "combat"],
                         help="Belirli bir manevra grubunu koşturur")
-    parser.add_argument("--duration", type=float, default=70.0, help="Koşu başına azami süre [saniye] (varsayılan: 70)")
+    parser.add_argument("--duration", type=float, default=115.0, help="Koşu başına azami süre [saniye] (varsayılan: 115)")
     args = parser.parse_args()
 
     # Determine targets to run

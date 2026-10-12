@@ -180,10 +180,9 @@ void Intercept::UpdateTarget(float dt)
 	if (!new_sample_processed) {
 		const bool follow_target_fresh = _has_follow_target && (hrt_elapsed_time(&_last_target_rx_time) < 1_s);
 
-		if (_visual_contact && _target_detection.range_valid
-		    && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)
-		    && (!follow_target_fresh || _target_detection.range_m < 20.0f)) {
-			// Visual tracking active (primary in terminal range <20m or when GPS follow_target is stale/unavailable)
+		if (!follow_target_fresh && _visual_contact && _target_detection.range_valid
+		    && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)) {
+			// Visual tracking active as resilient fallback when GPS follow_target is stale/unavailable
 			const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
 			const matrix::Vector3f los_b(_target_detection.los_body[0], _target_detection.los_body[1], _target_detection.los_body[2]);
 			const matrix::Quatf q_att(_vehicle_attitude.q);
@@ -520,8 +519,16 @@ void Intercept::Run()
 			matrix::Vector3f a_cmd;
 			float yaw_cmd{_local_pos.heading};
 
-			// Compute analytical 3D Blended APN + PID Rendezvous Guidance
-			ComputeBlendedAPNGuidance(a_cmd, yaw_cmd, dt);
+			// Low-altitude guard: if vehicle is below 2.5m altitude, perform vertical climb-out before forward tilt
+			const bool low_altitude_takeoff = (_local_pos.z_valid && _local_pos.z > -2.5f);
+
+			if (low_altitude_takeoff) {
+				a_cmd = matrix::Vector3f(0.0f, 0.0f, -3.0f);
+				yaw_cmd = _local_pos.heading;
+			} else {
+				// Compute analytical 3D Blended APN + PID Rendezvous Guidance
+				ComputeBlendedAPNGuidance(a_cmd, yaw_cmd, dt);
+			}
 
 			_last_a_cmd = a_cmd;
 			_last_yaw_cmd = yaw_cmd;
@@ -529,16 +536,15 @@ void Intercept::Run()
 			// Feedforward acceleration + vertical position setpoint (decoupled horizontal velocity eliminates limit-cycle oscillation)
 			trajectory_setpoint_s sp{};
 			sp.timestamp = now;
-			// Altitude locked firmly to target basket height across all phases (rejects aerodynamic wing lift)
 			sp.position[0] = NAN;
 			sp.position[1] = NAN;
-			sp.position[2] = _p_v(2);
+			sp.position[2] = low_altitude_takeoff ? -3.0f : _p_v(2);
 			sp.acceleration[0] = a_cmd(0);
 			sp.acceleration[1] = a_cmd(1);
-			sp.acceleration[2] = _target_accel(2);
+			sp.acceleration[2] = low_altitude_takeoff ? -3.0f : _target_accel(2);
 			sp.velocity[0] = NAN;
 			sp.velocity[1] = NAN;
-			sp.velocity[2] = _v_v(2);
+			sp.velocity[2] = low_altitude_takeoff ? -2.0f : _v_v(2);
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;
 			_trajectory_setpoint_pub.publish(sp);
