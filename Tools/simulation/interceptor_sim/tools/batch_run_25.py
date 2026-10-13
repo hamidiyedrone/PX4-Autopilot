@@ -504,7 +504,7 @@ class TelemetryRecorder:
         }
 
 
-def execute_single_run(scen, max_duration=115.0):
+def execute_single_run(scen, max_duration=115.0, gui=False):
     run_id = scen["id"]
     name = scen["name"]
     print(f"\n{'='*80}")
@@ -528,8 +528,8 @@ def execute_single_run(scen, max_duration=115.0):
 
     sim_env = dict(os.environ)
     sim_env.update({
-        "HEADLESS": "1",
-        "VIEW": "0",
+        "HEADLESS": "0" if gui else os.environ.get("HEADLESS", "1"),
+        "VIEW": "1" if gui else os.environ.get("VIEW", "0"),
         "PATTERN": scen["pattern"],
         "TARGET_ARGS": target_args,
         "PX4_GZ_STANDALONE": "1"
@@ -685,6 +685,7 @@ def main():
     parser.add_argument("--group", choices=["speed", "weave", "turn", "vertical", "throttle", "combat"],
                         help="Belirli bir manevra grubunu koşturur")
     parser.add_argument("--duration", type=float, default=115.0, help="Koşu başına azami süre [saniye] (varsayılan: 115)")
+    parser.add_argument("--gui", action="store_true", help="Gazebo 3D görsel arayüzünü ve kamera penceresini açar")
     args = parser.parse_args()
 
     # Determine targets to run
@@ -722,7 +723,7 @@ def main():
     for scen in targets:
         # Remove previous result for this ID if exists
         results = [r for r in results if r.get("run_id") != scen["id"]]
-        res = execute_single_run(scen, max_duration=args.duration)
+        res = execute_single_run(scen, max_duration=args.duration, gui=args.gui)
         results.append(res)
         generate_batch_reports(results)
         time.sleep(2.0)
