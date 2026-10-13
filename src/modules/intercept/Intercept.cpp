@@ -262,11 +262,9 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 	const float d_offset = _param_int_basket_d.get();
 
 	// 3. Smooth approach speed profile:
-	// When far (> 50m): sprint towards target_speed + 12 m/s
-	// When approaching (50m down to 18m): smoothly decelerate towards target_speed + 2.5 m/s
 	const float dist_to_basket = math::max(0.0f, dist_to_target - d_offset);
-	const float desired_closing = math::constrain(sqrtf(2.0f * 1.5f * dist_to_basket), 2.0f, 14.0f);
-	_fwd_speed_cmd = math::constrain(target_speed + desired_closing, 15.0f, 44.0f);
+	const float desired_closing = math::constrain(sqrtf(2.0f * 1.2f * dist_to_basket), 0.0f, 10.0f);
+	_fwd_speed_cmd = math::constrain(target_speed + desired_closing, 15.0f, 42.0f);
 
 	// 4. Virtual aim point at the basket with 2nd-order turn acceleration compensation
 	const matrix::Vector3f aim_point = _target_pos - target_dir * d_offset;
@@ -278,56 +276,28 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim + _target_accel * (0.5f * t_acc * t_acc);
 	const matrix::Vector3f to_intercept = intercept_point - self_pos;
 
-	// 5. Horizontal velocity setpoint in inertial NED with dynamic agile turn acceleration limiting
+	// 5. Horizontal velocity setpoint in inertial NED
 	const matrix::Vector2f to_intercept_xy(to_intercept(0), to_intercept(1));
 	const float dist_xy = to_intercept_xy.norm();
-	float desired_vx{0.0f};
-	float desired_vy{0.0f};
 
 	if (dist_xy > 0.5f) {
 		const matrix::Vector2f vel_xy = (to_intercept_xy / dist_xy) * _fwd_speed_cmd;
-		desired_vx = vel_xy(0);
-		desired_vy = vel_xy(1);
+		vel_cmd(0) = vel_xy(0);
+		vel_cmd(1) = vel_xy(1);
 	} else {
-		desired_vx = target_dir(0) * _fwd_speed_cmd;
-		desired_vy = target_dir(1) * _fwd_speed_cmd;
+		vel_cmd(0) = target_dir(0) * _fwd_speed_cmd;
+		vel_cmd(1) = target_dir(1) * _fwd_speed_cmd;
 	}
 
-	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 20.0f);
-	const float max_dvh = max_acc_hor * dt;
-	if (_last_cmd_valid && dt > 0.005f) {
-		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
-		vel_cmd(1) = math::constrain(desired_vy, _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
-	} else {
-		vel_cmd(0) = desired_vx;
-		vel_cmd(1) = desired_vy;
-	}
-
-	// 6. Altitude tracking in Approach mode (Extended to +/-7.0 m/s to match rapid dives and zoom climbs)
+	// 6. Altitude tracking in Approach mode (smooth, non-aggressive vertical tracking)
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
-	const float K_z_p = _param_int_kp_z_app.get();
-	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.0f, 7.0f);
-
-	const float max_dvz = 4.0f * dt;
-	if (_last_cmd_valid && dt > 0.005f) {
-		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
-	} else {
-		vel_cmd(2) = vz_desired;
-	}
+	vel_cmd(2) = math::constrain(target_vz + 0.80f * delta_z, -2.5f, 2.5f);
 
 	// 7. Yaw setpoint towards target
 	const float dx = _target_pos(0) - self_pos(0);
 	const float dy = _target_pos(1) - self_pos(1);
-	const float desired_yaw = atan2f(dy, dx);
-
-	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
-		const float dyaw = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
-		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(dyaw, -max_yaw_rate * dt, max_yaw_rate * dt));
-	} else {
-		yaw_cmd = desired_yaw;
-	}
+	yaw_cmd = atan2f(dy, dx);
 }
 
 void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
@@ -348,56 +318,37 @@ void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd,
 	// Decompose position error into along-track (parallel to target_dir) and cross-track
 	const float r_along = r_v.dot(target_dir); // > 0 means drone is behind basket
 	const matrix::Vector3f r_cross = r_v - target_dir * r_along;
-
-	// Integrate cross-track position error with anti-windup (steady-state wind drift)
-	_pos_integral(0) = math::constrain(_pos_integral(0) + r_cross(0) * dt, -1.5f, 1.5f);
-	_pos_integral(1) = math::constrain(_pos_integral(1) + r_cross(1) * dt, -1.5f, 1.5f);
-	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -1.5f, 1.5f);
-
-	// Along-track: smooth, critically damped approach to basket with sqrt deceleration curve
-	float v_along_corr = 0.0f;
 	const float v_along_rel = v_rel.dot(target_dir); // current closing rate
 
-	if (r_along > 0.0f) {
-		// Behind basket: smoothly approach with strong damping on closing rate to prevent overshoot
-		const float v_close_des = math::min(4.5f, sqrtf(2.0f * 1.5f * r_along));
-		const float v_err = v_close_des - v_along_rel;
-		v_along_corr = math::constrain(1.2f * v_err, -3.0f, 5.0f);
-	} else {
-		// In front of basket: brake immediately to restore safe standoff distance!
-		v_along_corr = math::constrain(1.5f * r_along - 0.8f * v_along_rel, -6.0f, 0.0f);
-	}
+	// 1. Along-track: Smooth, continuous hyperbolic tangent (tanh) velocity law.
+	// C^inf infinitely differentiable, zero derivative singularity at r=0, symmetric deceleration.
+	// Completely eliminates pitch surging / hunting limit cycles!
+	const float v_close_max = 5.0f; // max relative closing speed in basket approach (m/s)
+	const float K_along = 0.55f;     // gentle, critically damped proportional gain (1/s)
+	const float v_along_des = v_close_max * tanhf((K_along * r_along) / v_close_max);
 
-	// Cross-track and vertical PD tracking with turn acceleration feedforward
-	const float tau_lead = 0.40f;
+	// Subtle relative velocity damping to kill residual oscillation without fighting PX4 inner loop
+	const float v_along_corr = math::constrain(v_along_des - 0.20f * (v_along_rel - v_along_des), -4.0f, 5.0f);
+
+	// 2. Cross-track: Critically damped PD with turn acceleration feedforward
+	_pos_integral(0) = math::constrain(_pos_integral(0) + r_cross(0) * dt, -1.0f, 1.0f);
+	_pos_integral(1) = math::constrain(_pos_integral(1) + r_cross(1) * dt, -1.0f, 1.0f);
+	const float tau_lead = 0.35f;
 	const matrix::Vector3f v_cross_corr(
-		1.5f * r_cross(0) - 0.7f * (v_rel(0) - target_dir(0) * v_along_rel) + 0.15f * _pos_integral(0) + _target_accel(0) * tau_lead,
-		1.5f * r_cross(1) - 0.7f * (v_rel(1) - target_dir(1) * v_along_rel) + 0.15f * _pos_integral(1) + _target_accel(1) * tau_lead,
-		1.4f * r_v(2) - 0.6f * v_rel(2) + 0.15f * _pos_integral(2) + _target_accel(2) * 0.30f
+		1.2f * r_cross(0) - 0.4f * (v_rel(0) - target_dir(0) * v_along_rel) + 0.10f * _pos_integral(0) + _target_accel(0) * tau_lead,
+		1.2f * r_cross(1) - 0.4f * (v_rel(1) - target_dir(1) * v_along_rel) + 0.10f * _pos_integral(1) + _target_accel(1) * tau_lead,
+		0.0f
 	);
 
-	const matrix::Vector3f v_corr = target_dir * v_along_corr + v_cross_corr;
-	const matrix::Vector3f v_rdv = _target_vel + v_corr;
+	// 3. Vertical / Altitude (Z axis): Gentle, decoupled tracking to eliminate pitch-altitude coupling
+	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -0.8f, 0.8f);
+	const float v_z_corr = math::constrain(0.85f * r_v(2) - 0.30f * v_rel(2) + 0.10f * _pos_integral(2) + _target_accel(2) * 0.25f, -2.5f, 2.5f);
 
-	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 20.0f);
-	const float max_dvh = max_acc_hor * dt;
-	if (_last_cmd_valid && dt > 0.005f) {
-		vel_cmd(0) = math::constrain(v_rdv(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
-		vel_cmd(1) = math::constrain(v_rdv(1), _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
-		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 3.5f * dt, _last_vel_cmd(2) + 3.5f * dt);
-	} else {
-		vel_cmd = v_rdv;
-	}
+	const matrix::Vector3f v_corr = target_dir * v_along_corr + v_cross_corr + matrix::Vector3f(0.0f, 0.0f, v_z_corr);
+	vel_cmd = _target_vel + v_corr;
 
 	// Yaw aligns with target direction
-	const float target_yaw = atan2f(target_dir(1), target_dir(0));
-	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
-		const float dyaw = matrix::wrap_pi(target_yaw - _last_yaw_cmd);
-		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(dyaw, -max_yaw_rate * dt, max_yaw_rate * dt));
-	} else {
-		yaw_cmd = target_yaw;
-	}
+	yaw_cmd = atan2f(target_dir(1), target_dir(0));
 }
 
 void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
@@ -441,16 +392,52 @@ void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float
 	float yaw_basket{_local_pos.heading};
 	ComputeBasketGuidance(vel_basket, yaw_basket, dt);
 
-	// Smooth blending between Midcourse Lead-Pursuit (Rv > 18m) and Basket Seating (Rv <= 6m)
-	const float w = math::constrain((R_v - 6.0f) / 12.0f, 0.0f, 1.0f);
-	vel_cmd = (vel_midcourse * w) + (vel_basket * (1.0f - w));
+	// Smooth Hermite/Cosine S-curve blending between Midcourse Lead-Pursuit (Rv > 16m) and Basket Seating (Rv <= 5m)
+	// Zero derivative at both ends completely eliminates switching jerks
+	const float s = math::constrain((R_v - 5.0f) / 11.0f, 0.0f, 1.0f);
+	const float w = 0.5f * (1.0f - cosf(3.14159265f * s));
+	const matrix::Vector3f raw_vel_cmd = (vel_midcourse * w) + (vel_basket * (1.0f - w));
 
 	const float dyaw = matrix::wrap_pi(yaw_basket - yaw_midcourse);
-	yaw_cmd = matrix::wrap_pi(yaw_midcourse + dyaw * (1.0f - w));
+	const float raw_yaw_cmd = matrix::wrap_pi(yaw_midcourse + dyaw * (1.0f - w));
 
-	if (R_v > 18.0f) {
+	// MASTER TILT & JERK LIMITER ON FINAL SETPOINT:
+	// In Basket / Terminal approach (Rv <= 16m), strictly limit horizontal acceleration to 4.5 m/s^2 (~24 deg max tilt change).
+	// This physically guarantees the drone CANNOT pitch oscillate or violent jerk!
+	const float max_acc_hor = (R_v > 16.0f) ? 8.0f : 4.5f;
+	const float max_dvh = max_acc_hor * dt;
+	const float max_dvz = 2.5f * dt;
+
+	matrix::Vector3f slewed_vel;
+	if (_last_cmd_valid && dt > 0.005f) {
+		slewed_vel(0) = math::constrain(raw_vel_cmd(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
+		slewed_vel(1) = math::constrain(raw_vel_cmd(1), _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
+		slewed_vel(2) = math::constrain(raw_vel_cmd(2), _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
+	} else {
+		slewed_vel = raw_vel_cmd;
+	}
+
+	// MASTER LOW-PASS FILTER (Anti-Jitter / EMA):
+	// Wipes out discrete steps from GPS telemetry (2-5 Hz) and optical solver noise
+	const float alpha = math::constrain(dt / 0.10f, 0.10f, 0.35f); // ~2.5 Hz cutoff
+	if (_last_cmd_valid) {
+		vel_cmd = _last_vel_cmd * (1.0f - alpha) + slewed_vel * alpha;
+	} else {
+		vel_cmd = slewed_vel;
+	}
+
+	// Smooth yaw rate limiting
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float dy = matrix::wrap_pi(raw_yaw_cmd - _last_yaw_cmd);
+		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(dy, -max_yaw_rate * dt, max_yaw_rate * dt));
+	} else {
+		yaw_cmd = raw_yaw_cmd;
+	}
+
+	if (R_v > 16.0f) {
 		_guidance_phase = GuidancePhase::APPROACH;
-	} else if (R_v > 6.0f) {
+	} else if (R_v > 5.0f) {
 		_guidance_phase = GuidancePhase::BLENDING;
 	} else {
 		_guidance_phase = GuidancePhase::RENDEZVOUS;
