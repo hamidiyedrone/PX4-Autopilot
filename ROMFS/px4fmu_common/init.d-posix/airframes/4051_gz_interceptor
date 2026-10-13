@@ -53,11 +53,11 @@ param set-default MPC_THR_HOVER 0.24
 # nose camera on the thrust axis
 param set-default TGV_MNT_PITCH 90
 
-# Storm32 3-axis nose seeker gimbal (+/- 45 deg yaw, +/- 35 deg roll, +/- 60 deg pitch)
+# Storm32 3-axis nose seeker gimbal (+/- 180 deg yaw, +/- 45 deg roll, +/- 95 deg pitch)
 param set-default MNT_MODE_OUT 0
-param set-default MNT_RANGE_YAW 45.0
-param set-default MNT_RANGE_ROLL 35.0
-param set-default MNT_RANGE_PITCH 60.0
+param set-default MNT_RANGE_YAW 180.0
+param set-default MNT_RANGE_ROLL 45.0
+param set-default MNT_RANGE_PITCH 95.0
 
 # fast and aggressive: strong tilt, high speeds / accelerations
 param set-default MPC_TILTMAX_AIR 78

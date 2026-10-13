@@ -419,7 +419,7 @@
       </axis>
     </joint>
 
-    <!-- Storm32 3-Axis Gimbal: Yaw Joint & Link (Pan +/- 45 deg around fuselage z) -->
+    <!-- Storm32 3-Axis Gimbal: Yaw Joint & Link (Pan +/- 180 deg around fuselage z) -->
     <link name="gimbal_yaw_link">
       <pose>-0.0380 0 0.5015 0 0 0</pose>
       <inertial>
@@ -459,8 +459,8 @@
       <axis>
         <xyz>0 0 1</xyz>
         <limit>
-          <lower>-0.6109</lower>
-          <upper>0.6109</upper>
+          <lower>-0.7854</lower>
+          <upper>0.7854</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -471,7 +471,7 @@
       </physics>
     </joint>
 
-    <!-- Storm32 3-Axis Gimbal: Pan Joint & Link (Azimuth +/- 45 deg around dorsal axis) -->
+    <!-- Storm32 3-Axis Gimbal: Pan Joint & Link (Azimuth +/- 180 deg around dorsal axis) -->
     <link name="gimbal_roll_link">
       <pose>-0.0640 0 0.5375 0 0 0</pose>
       <inertial>
@@ -511,8 +511,8 @@
       <axis>
         <xyz>-1 0 0</xyz>
         <limit>
-          <lower>-0.7854</lower>
-          <upper>0.7854</upper>
+          <lower>-3.1416</lower>
+          <upper>3.1416</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>
@@ -523,7 +523,7 @@
       </physics>
     </joint>
 
-    <!-- Storm32 3-Axis Gimbal: Pitch Joint & Link (+/- 60 deg around transverse y axis) with Seeker Camera -->
+    <!-- Storm32 3-Axis Gimbal: Pitch Joint & Link (+/- 95 deg around transverse y axis) with Seeker Camera -->
     <link name="gimbal_pitch_link">
       <pose>-0.0380 0 0.5625 0 0 0</pose>
       <inertial>
@@ -624,8 +624,8 @@
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-1.0472</lower>
-          <upper>1.0472</upper>
+          <lower>-1.6581</lower>
+          <upper>1.6581</upper>
           <effort>5</effort>
           <velocity>10</velocity>
         </limit>

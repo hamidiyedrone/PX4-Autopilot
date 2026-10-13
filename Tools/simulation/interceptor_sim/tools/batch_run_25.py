@@ -285,24 +285,52 @@ class TelemetryRecorder:
         self.net_fired = False
         self.firing_counter = 0
 
+        # Camera Seeker detection state
+        self.cam_detected = 0
+        self.cam_range_m = 0.0
+        self.cam_bbox = [0.0, 0.0, 0.0, 0.0]
+        self.cam_last_rx = 0.0
+
+        # Gyroscope angular rate state (deg/s)
+        self.gyro_rates_dps = np.zeros(3)
+
         # Gazebo subscribers
         try:
             from gz.transport13 import Node
             from gz.msgs10.pose_v_pb2 import Pose_V
             from gz.msgs10.clock_pb2 import Clock
             from gz.msgs10.double_pb2 import Double
+            from gz.msgs10.double_v_pb2 import Double_V
+            from gz.msgs10.imu_pb2 import IMU
             self.node = Node()
             self.node.subscribe(Clock, "/world/ankara/clock", self._on_clock)
             self.node.subscribe(Pose_V, "/world/ankara/dynamic_pose/info", self._on_poses)
             self.node.subscribe(Double, "/model/interceptor_0/command/seeker_yaw", lambda m: setattr(self, "cmd_gmb_yaw", m.data))
             self.node.subscribe(Double, "/model/interceptor_0/command/seeker_pitch", lambda m: setattr(self, "cmd_gmb_pitch", m.data))
             self.node.subscribe(Double, "/model/interceptor_0/command/net_launcher_pitch", lambda m: setattr(self, "cmd_barrel_pitch", m.data))
+            self.node.subscribe(Double_V, "/model/interceptor_0/detection", self._on_detection)
+            self.node.subscribe(IMU, "/world/ankara/model/interceptor_0/link/base_link/sensor/imu_sensor/imu", self._on_imu)
         except Exception:
             self.node = None
 
         self.poses = {}
         self.prev_poses = {}
         self.prev_times = {}
+
+    def _on_detection(self, msg):
+        with self.lock:
+            if len(msg.data) >= 6:
+                self.cam_bbox = [float(msg.data[0]), float(msg.data[1]), float(msg.data[2]), float(msg.data[3])]
+                self.cam_range_m = float(msg.data[4])
+                self.cam_detected = 1 if msg.data[5] > 0.5 else 0
+                self.cam_last_rx = self.sim_time
+
+    def _on_imu(self, msg):
+        with self.lock:
+            wx = math.degrees(msg.angular_velocity.x)
+            wy = -math.degrees(msg.angular_velocity.y)
+            wz = -math.degrees(msg.angular_velocity.z)
+            self.gyro_rates_dps = np.array([wx, wy, wz])
 
     def _on_clock(self, msg):
         self.sim_time = msg.sim.sec + msg.sim.nsec * 1e-9
@@ -446,6 +474,21 @@ class TelemetryRecorder:
                     "cmd_acc_norm": round(float(np.linalg.norm(self.cmd_acc)), 2),
                     "cmd_gmb_pitch_deg": round(math.degrees(self.cmd_gmb_pitch), 1),
                     "cmd_gmb_yaw_deg": round(math.degrees(self.cmd_gmb_yaw), 1),
+
+                    # Camera Seeker & Visual Pose Detection
+                    "cam_detected": self.cam_detected if (self.sim_time - self.cam_last_rx < 0.6) else 0,
+                    "cam_range_m": round(self.cam_range_m, 2) if (self.sim_time - self.cam_last_rx < 0.6) else 0.0,
+                    "cam_bbox_cx": round(self.cam_bbox[0], 3),
+                    "cam_bbox_cy": round(self.cam_bbox[1], 3),
+                    "cam_bbox_w": round(self.cam_bbox[2], 3),
+                    "cam_bbox_h": round(self.cam_bbox[3], 3),
+
+                    # Drone Gyroscope Angular Rates (Body FRD [deg/s])
+                    "gyro_roll_rate_dps": round(float(self.gyro_rates_dps[0]), 2),
+                    "gyro_pitch_rate_dps": round(float(self.gyro_rates_dps[1]), 2),
+                    "gyro_yaw_rate_dps": round(float(self.gyro_rates_dps[2]), 2),
+                    "gyro_rate_norm_dps": round(float(np.linalg.norm(self.gyro_rates_dps)), 2),
+
                     "net_fired": 1 if self.net_fired else 0
                 }
                 self.records.append(row)
@@ -478,18 +521,29 @@ class TelemetryRecorder:
         max_pitch_diff = (max(pitches) - min(pitches)) if pitches else 0.0
         net_fired = any(r["net_fired"] == 1 for r in rec)
 
+        gyro_norms = [r.get("gyro_rate_norm_dps", 0.0) for r in active]
+        max_gyro = max(gyro_norms) if gyro_norms else 0.0
+        mean_gyro = float(np.mean(gyro_norms)) if gyro_norms else 0.0
+
+        cam_detected_frames = sum(1 for r in active if r.get("cam_detected", 0) == 1)
+        cam_ratio = (cam_detected_frames / len(active)) if active else 0.0
+
         # Performance score (0 - 100)
         score = 0
         if net_fired:
-            score += 50
+            score += 40
         if min_rv <= 2.2:
             score += 25
         elif min_rv <= 3.5:
             score += 15
         if rev_rate < 1.0 and max_pitch_diff < 15.0:
-            score += 25
+            score += 20
         elif rev_rate < 1.5:
+            score += 10
+        if max_gyro < 120.0:
             score += 15
+        elif max_gyro < 200.0:
+            score += 5
 
         return {
             "duration_s": round(dur, 1),
@@ -499,6 +553,9 @@ class TelemetryRecorder:
             "max_tilt_deg": round(max(tilts) if tilts else 0.0, 1),
             "pitch_osc_deg": round(max_pitch_diff, 1),
             "pitch_rev_hz": round(rev_rate, 2),
+            "max_gyro_rate_dps": round(max_gyro, 1),
+            "mean_gyro_rate_dps": round(mean_gyro, 1),
+            "cam_track_ratio": round(cam_ratio, 3),
             "net_fired": net_fired,
             "score": score
         }
@@ -620,7 +677,8 @@ def execute_single_run(scen, max_duration=115.0, gui=False):
     status_icon = "✅ CAPTURED" if analysis.get("net_fired") else "⚠️ CLOSE PASS"
     print(f"\n[RUN-{run_id:02d} SONUCU]: {status_icon}")
     print(f"  Min Sepet Mesafesi: {analysis.get('min_basket_rv_m')} m | Ağ Atıldı mı: {analysis.get('net_fired')}")
-    print(f"  Pitch Salınımı: {analysis.get('pitch_osc_deg')}° ({analysis.get('pitch_rev_hz')} Hz) | Skor: {analysis.get('score')}/100")
+    print(f"  Pitch Salınımı: {analysis.get('pitch_osc_deg')}° ({analysis.get('pitch_rev_hz')} Hz) | Max Gyro: {analysis.get('max_gyro_rate_dps', 0.0)}°/s")
+    print(f"  Kamera Kilit Oranı: {analysis.get('cam_track_ratio', 0.0)*100:.1f}% | Skor: {analysis.get('score')}/100")
     print(f"  CSV Kaydı: {csv_path}\n", flush=True)
 
     return analysis
@@ -647,15 +705,16 @@ def generate_batch_reports(results):
         "",
         "## Koşu Sonuç Tablosu",
         "",
-        "| ID | Grup | Senaryo Adı | Sepet Hatası R_v [m] | Kapanma V_c [m/s] | Pitch Salınım [°] | Ağ Atıldı mı? | APN Skoru | Durum |",
-        "| :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |"
+        "| ID | Grup | Senaryo Adı | Sepet Hatası R_v [m] | Kapanma V_c [m/s] | Max Gyro [°/s] | Kam. Kilit [%] | Ağ Atıldı mı? | Skor | Durum |",
+        "| :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
     ]
 
     for r in results:
         status_sym = "✅ Başarılı (Captured)" if r.get("net_fired") else "⚠️ İyileştirme Gerek"
         lines.append(f"| RUN-{r['run_id']:02d} | `{r['group']}` | {r['name']} | "
                      f"{r.get('min_basket_rv_m', '-')} m | {r.get('mean_closing_vc', '-')} m/s | "
-                     f"{r.get('pitch_osc_deg', '-')}° | {'EVET' if r.get('net_fired') else 'HAYIR'} | "
+                     f"{r.get('max_gyro_rate_dps', '-')} °/s | {r.get('cam_track_ratio', 0)*100:.1f}% | "
+                     f"{'EVET' if r.get('net_fired') else 'HAYIR'} | "
                      f"{r.get('score', 0)}/100 | {status_sym} |")
 
     lines.extend([

@@ -31,6 +31,7 @@ import socket
 import struct
 import time
 
+import cv2
 import numpy as np
 from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.double_pb2 import Double
@@ -40,6 +41,17 @@ from gz.transport13 import Node
 
 SIM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODEL_DIR = os.path.join(SIM_DIR, "models", "talon1718")
+
+# Canonical 3D landmark keypoints of Talon 1718 in body FLU frame
+TALON_KEYPOINTS_3D = np.array([
+    [ 0.527,  0.000, -0.022],  # Nose
+    [-0.149,  0.859,  0.062],  # L_Wing
+    [-0.150, -0.859,  0.062],  # R_Wing
+    [-0.598,  0.000, -0.028],  # Tail
+    [-0.539,  0.223,  0.198],  # VT_L
+    [-0.539, -0.223,  0.198],  # VT_R
+    [ 0.000,  0.000,  0.000],  # CG
+], dtype=np.float64)
 
 # ----------------------------------------------------------------- protocol ---
 
@@ -475,6 +487,25 @@ def main():
             pub_detection.publish(msg_det)
             continue
 
+        # Derive distance using OpenCV Perspective-n-Point (solvePnP) from 2D landmark keypoints
+        range_out = range_m
+        kpts_world = (R_tgt @ TALON_KEYPOINTS_3D.T).T + p_tgt
+        kpts_cam = (R_cam_opt_world @ (kpts_world - p_cam_world).T).T
+        if np.all(kpts_cam[:, 2] > 0.1):
+            u_k = fx * kpts_cam[:, 0] / kpts_cam[:, 2] + cx
+            v_k = fy * kpts_cam[:, 1] / kpts_cam[:, 2] + cy
+            kpts_2d = np.column_stack((u_k, v_k)).astype(np.float64)
+            K_mat = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+            try:
+                success, rvec_pnp, tvec_pnp = cv2.solvePnP(
+                    TALON_KEYPOINTS_3D, kpts_2d, K_mat, np.zeros(4, dtype=np.float64),
+                    flags=cv2.SOLVEPNP_ITERATIVE
+                )
+                if success:
+                    range_out = float(np.linalg.norm(tvec_pnp))
+            except Exception:
+                pass
+
         if gimbal_enabled:
             # Line-of-sight in vehicle body FRD frame
             d_frd = np.array([d_tgt_body[0], -d_tgt_body[1], -d_tgt_body[2]])
@@ -495,13 +526,13 @@ def main():
         pkt = pack_packet(
             frame_id, 0, flags, confidence,
             los_out,
-            float(range_m), range_sigma,
+            float(range_out), range_sigma,
             q_out,
             bbox
         )
         sock.sendto(pkt, dest)
         msg_det = Double_V()
-        msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_m), 1.0])
+        msg_det.data.extend([bbox[0], bbox[1], bbox[2], bbox[3], float(range_out), 1.0])
         pub_detection.publish(msg_det)
 
         # periodic status

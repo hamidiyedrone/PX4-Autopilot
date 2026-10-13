@@ -238,140 +238,216 @@ void Intercept::UpdateVisualDetection()
 	}
 }
 
-void Intercept::ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cmd, float dt)
+void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
 {
-	// -------------------------------------------------------------------------
-	// A. Hedef Yönelim ve Sanal Sepet (Capture Basket Geometry)
-	// -------------------------------------------------------------------------
-	matrix::Vector3f u_t;
-	const float target_speed = _target_vel.norm();
+	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+	const float dist_to_target = (_target_pos - self_pos).norm();
 
-	if (target_speed > 1.0f) {
-		u_t = _target_vel.normalized();
-	} else {
-		u_t = matrix::Vector3f(1.0f, 0.0f, 0.0f);
+	// 1. Closing rate calculation
+	if (_last_approach_dist < 0.0f) {
+		_last_approach_dist = dist_to_target;
+		_filt_closing_speed = 0.0f;
+	} else if (dt > 0.002f) {
+		const float raw_closing = (_last_approach_dist - dist_to_target) / dt;
+		_filt_closing_speed = 0.85f * _filt_closing_speed + 0.15f * raw_closing;
+		_last_approach_dist = dist_to_target;
 	}
 
-	// Interceptor hedef noktası: Talon'un d_offset = 2.5m tam arkasındaki sepet
-	const float d_offset = _param_int_basket_d.get(); // 2.5m
-	const matrix::Vector3f p_v = _target_pos - (u_t * d_offset);
-	const matrix::Vector3f v_v = _target_vel;
-	const matrix::Vector3f a_v = _target_accel;
-	_p_v = p_v;
-	_v_v = v_v;
+	// 2. Initialize continuous forward speed
+	const float psi = _local_pos.heading;
+	const float current_fwd_speed = _local_pos.vx * cosf(psi) + _local_pos.vy * sinf(psi);
+	if (!_speed_initialized) {
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, 40.0f);
+		_fwd_accel_cmd = 0.0f;
+		_speed_initialized = true;
+	}
 
-	// -------------------------------------------------------------------------
-	// B. Bağıl Kinematik ve Görüş Hattı (LOS Kinematics)
-	// -------------------------------------------------------------------------
+	const float target_speed = _target_vel.norm();
+	matrix::Vector3f target_dir(1.0f, 0.0f, 0.0f);
+	if (target_speed > 1.0f) {
+		target_dir = _target_vel / target_speed;
+	}
+
+	// 3. Smooth closing speed profile: gentle deceleration tapering inside 90m
+	const float min_closing = _param_int_min_closing.get(); // default 5.0 m/s
+	if (dist_to_target > 90.0f) {
+		// Fast pursuit cruise towards 42 m/s
+		_fwd_accel_cmd = 4.0f;
+	} else {
+		// Inside 90m: closing speed smoothly tapers down to min_closing at 20m
+		const float desired_closing = min_closing + (dist_to_target - 20.0f) * 0.15f;
+		const float closing_err = _filt_closing_speed - desired_closing;
+
+		if (closing_err > 0.0f) {
+			_fwd_accel_cmd = math::constrain(-1.5f - 0.35f * closing_err, -4.5f, -0.6f);
+		} else if (closing_err < -2.0f) {
+			_fwd_accel_cmd = 2.0f;
+		} else {
+			_fwd_accel_cmd = 0.0f;
+		}
+	}
+
+	_fwd_speed_cmd += _fwd_accel_cmd * dt;
+	const float min_approach_speed = math::max(target_speed + min_closing, 15.0f);
+	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 42.0f);
+
+	// 4. Virtual aim point 25m behind target along flight line with Lead-Pursuit
+	const float dist_behind = 25.0f;
+	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
+	const matrix::Vector3f to_aim = aim_point - self_pos;
+	const float dist_to_aim = to_aim.norm();
+	const float time_to_aim = dist_to_aim / math::max(_fwd_speed_cmd, 10.0f);
+
+	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim;
+	const matrix::Vector3f to_intercept = intercept_point - self_pos;
+
+	// 5. Horizontal velocity setpoint in inertial NED with MPC_ACC_HOR slew limiting
+	const matrix::Vector2f to_intercept_xy(to_intercept(0), to_intercept(1));
+	const float dist_xy = to_intercept_xy.norm();
+	float desired_vx{0.0f};
+	float desired_vy{0.0f};
+
+	if (dist_xy > 0.5f) {
+		const matrix::Vector2f vel_xy = (to_intercept_xy / dist_xy) * _fwd_speed_cmd;
+		desired_vx = vel_xy(0);
+		desired_vy = vel_xy(1);
+	} else {
+		desired_vx = target_dir(0) * _fwd_speed_cmd;
+		desired_vy = target_dir(1) * _fwd_speed_cmd;
+	}
+
+	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float max_dvh = max_acc_hor * dt;
+	if (_last_cmd_valid && dt > 0.005f) {
+		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
+		vel_cmd(1) = math::constrain(desired_vy, _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
+	} else {
+		vel_cmd(0) = desired_vx;
+		vel_cmd(1) = desired_vy;
+	}
+
+	// 6. Altitude tracking in Approach mode
+	const float delta_z = intercept_point(2) - self_pos(2);
+	const float target_vz = _target_vel(2);
+	const float K_z_p = _param_int_kp_z_app.get();
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -3.5f, 2.5f);
+
+	const float max_dvz = 2.0f * dt;
+	if (_last_cmd_valid && dt > 0.005f) {
+		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
+	} else {
+		vel_cmd(2) = vz_desired;
+	}
+
+	// 7. Yaw setpoint towards target
+	const float dx = _target_pos(0) - self_pos(0);
+	const float dy = _target_pos(1) - self_pos(1);
+	const float desired_yaw = atan2f(dy, dx);
+
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float dyaw = matrix::wrap_pi(desired_yaw - _last_yaw_cmd);
+		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(dyaw, -max_yaw_rate * dt, max_yaw_rate * dt));
+	} else {
+		yaw_cmd = desired_yaw;
+	}
+}
+
+void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
+{
+	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+	const float target_speed = _target_vel.norm();
+	matrix::Vector3f target_dir(1.0f, 0.0f, 0.0f);
+	if (target_speed > 1.0f) {
+		target_dir = _target_vel / target_speed;
+	}
+
+	const float d_offset = _param_int_basket_d.get(); // 2.5m
+	const matrix::Vector3f p_v = _target_pos - (target_dir * d_offset);
+	const matrix::Vector3f r_v = p_v - self_pos;
+
+	// Integrate basket position error with anti-windup
+	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -3.0f, 3.0f);
+	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -3.0f, 3.0f);
+	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -2.0f, 2.0f);
+
+	// Velocity matching + position seating PID
+	const matrix::Vector3f v_corr(
+		math::constrain(1.3f * r_v(0) + 0.20f * _pos_integral(0), -6.0f, 6.0f),
+		math::constrain(1.3f * r_v(1) + 0.20f * _pos_integral(1), -6.0f, 6.0f),
+		math::constrain(1.1f * r_v(2) + 0.15f * _pos_integral(2), -3.0f, 3.0f)
+	);
+	const matrix::Vector3f v_rdv = _target_vel + v_corr;
+
+	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float max_dvh = max_acc_hor * dt;
+	if (_last_cmd_valid && dt > 0.005f) {
+		vel_cmd(0) = math::constrain(v_rdv(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
+		vel_cmd(1) = math::constrain(v_rdv(1), _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
+		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 2.0f * dt, _last_vel_cmd(2) + 2.0f * dt);
+	} else {
+		vel_cmd = v_rdv;
+	}
+
+	// Yaw aligns with target direction
+	const float target_yaw = atan2f(target_dir(1), target_dir(0));
+	if (_last_cmd_valid && dt > 0.005f) {
+		const float max_yaw_rate = math::radians(_param_int_yaw_rate.get());
+		const float dyaw = matrix::wrap_pi(target_yaw - _last_yaw_cmd);
+		yaw_cmd = matrix::wrap_pi(_last_yaw_cmd + math::constrain(dyaw, -max_yaw_rate * dt, max_yaw_rate * dt));
+	} else {
+		yaw_cmd = target_yaw;
+	}
+}
+
+void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
+{
 	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
 	const matrix::Vector3f self_vel(_local_pos.vx, _local_pos.vy, _local_pos.vz);
 
-	const matrix::Vector3f r_v = p_v - self_pos;
-	const float R_v = r_v.norm();
-	const matrix::Vector3f v_rel = v_v - self_vel;
-
-	_last_R_v = R_v;
-
-	_last_r_v = r_v;
-
-	const matrix::Vector3f u_los = r_v / math::max(R_v, 0.01f);
-	const float V_c = - (r_v.dot(v_rel)) / math::max(R_v, 0.01f);
-	_last_V_c = V_c;
-
-	// Regularized line-of-sight angular rate (core radius R_core = 2.5m prevents close-range singularity & fishtailing)
-	const matrix::Vector3f omega_los = r_v.cross(v_rel) / math::max(R_v * R_v + 6.25f, 0.01f);
-
-	// -------------------------------------------------------------------------
-	// C. 3D Blended Güdüm Kanunu (APN + Rendezvous PID)
-	// -------------------------------------------------------------------------
-	// 1. Uzak Faz: 3D Augmented Proportional Navigation (R_v > 5.0m)
-	const float N = _param_int_apn_n.get(); // 3.8
-	const matrix::Vector3f a_t_perp = a_v - (u_los * a_v.dot(u_los));
-
-	// Lateral APN steering acceleration (perpendicular to LOS: nullifies LOS rate omega_los)
-	const matrix::Vector3f a_cmd_apn_lat = (omega_los.cross(u_los) * (N * math::max(V_c, 2.0f))) +
-					       (a_t_perp * (0.5f * N));
-
-	// Desired pursuit velocity: sprint closing velocity when far, smooth positive closing approaching basket
-	const float V_c_des = math::constrain(0.70f * R_v, 1.8f, 15.0f);
-	const matrix::Vector3f v_des_apn = v_v + (u_los * V_c_des);
-
-	// Longitudinal closing acceleration along LOS to achieve and maintain V_c_des (with low-pass damping)
-	const matrix::Vector3f v_err_apn = v_des_apn - self_vel;
-	const float a_long_raw = math::constrain(v_err_apn.dot(u_los) * 1.5f, -4.5f, 35.0f);
-	const float alpha_long = math::constrain(dt / 0.25f, 0.05f, 0.5f);
-	_a_long_filtered = _a_long_filtered * (1.0f - alpha_long) + a_long_raw * alpha_long;
-	const matrix::Vector3f a_cmd_apn = a_cmd_apn_lat + (u_los * _a_long_filtered);
-
-	// 2. Yakın Faz: Sepete Oturma / Hız Eşitleme PID (R_v <= 5.0m)
-	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -5.0f, 5.0f);
-	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -5.0f, 5.0f);
-	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -5.0f, 5.0f);
-
-	const matrix::Vector3f v_des_rdv = v_v + (r_v * 0.8f);
-	const matrix::Vector3f a_cmd_rendezvous = a_v +
-		matrix::Vector3f(6.5f * r_v(0), 6.5f * r_v(1), 7.0f * r_v(2)) +
-		matrix::Vector3f(4.2f * v_rel(0), 4.2f * v_rel(1), 4.5f * v_rel(2)) +
-		matrix::Vector3f(0.8f * _pos_integral(0), 0.8f * _pos_integral(1), 1.0f * _pos_integral(2));
-
-	// 3. Yumuşak Geçiş (Blending Filter: 2.0m ile 12.0m arası)
-	const float w = math::constrain((R_v - 2.0f) / 10.0f, 0.0f, 1.0f);
-	const matrix::Vector3f v_des = (v_des_apn * w) + (v_des_rdv * (1.0f - w));
-
-	_sp_vel = v_des;
-
-	// Blended feedforward acceleration
-	a_cmd = (a_cmd_apn * w) + (a_cmd_rendezvous * (1.0f - w));
-
-	// Prevent violent pitch flip backwards during forward pursuit:
-	// When pursuing a forward-flying target, longitudinal deceleration along target track
-	// is clamped so the drone decelerates smoothly (max -4.5 m/s^2) without snapping backwards.
-	if (target_speed > 3.0f) {
-		const float a_long = a_cmd.dot(u_t);
-		const float a_long_clamped = math::max(a_long, -4.5f);
-		a_cmd = a_cmd + u_t * (a_long_clamped - a_long);
+	const float target_speed = _target_vel.norm();
+	matrix::Vector3f target_dir(1.0f, 0.0f, 0.0f);
+	if (target_speed > 1.0f) {
+		target_dir = _target_vel / target_speed;
 	}
 
-	// Guidance Phase Update
-	if (R_v > 6.0f) {
-		_guidance_phase = GuidancePhase::APN_CRUISE;
-	} else if (R_v > 2.0f) {
+	const float d_offset = _param_int_basket_d.get(); // 2.5m
+	const matrix::Vector3f p_v = _target_pos - (target_dir * d_offset);
+	_p_v = p_v;
+	_v_v = _target_vel;
+
+	const matrix::Vector3f r_v = p_v - self_pos;
+	const float R_v = r_v.norm();
+	const matrix::Vector3f v_rel = _target_vel - self_vel;
+
+	_last_R_v = R_v;
+	_last_r_v = r_v;
+	_last_V_c = -(r_v.dot(v_rel)) / math::max(R_v, 0.01f);
+
+	matrix::Vector3f vel_midcourse;
+	float yaw_midcourse{_local_pos.heading};
+	ComputeMidcourseGuidance(vel_midcourse, yaw_midcourse, dt);
+
+	matrix::Vector3f vel_basket;
+	float yaw_basket{_local_pos.heading};
+	ComputeBasketGuidance(vel_basket, yaw_basket, dt);
+
+	// Smooth blending between Midcourse Lead-Pursuit (Rv > 22m) and Basket Seating (Rv <= 8m)
+	const float w = math::constrain((R_v - 8.0f) / 14.0f, 0.0f, 1.0f);
+	vel_cmd = (vel_midcourse * w) + (vel_basket * (1.0f - w));
+
+	const float dyaw = matrix::wrap_pi(yaw_basket - yaw_midcourse);
+	yaw_cmd = matrix::wrap_pi(yaw_midcourse + dyaw * (1.0f - w));
+
+	if (R_v > 22.0f) {
+		_guidance_phase = GuidancePhase::APPROACH;
+	} else if (R_v > 8.0f) {
 		_guidance_phase = GuidancePhase::BLENDING;
 	} else {
 		_guidance_phase = _net_fired ? GuidancePhase::NET_FIRED : GuidancePhase::RENDEZVOUS;
 	}
 
-	// 4. İvme Doyumu ve Yumuşatma (Jerk Limiter)
-	const float a_max = _param_int_acc_max.get(); // 55.0 m/s^2 (~5.6g)
-	const float a_cmd_norm = a_cmd.norm();
-
-	if (a_cmd_norm > a_max) {
-		a_cmd = (a_cmd / a_cmd_norm) * a_max;
-	}
-
-	// Jerk / slew-rate limit on commanded acceleration (prevents violent pitch snap)
-	const float max_jerk = 35.0f; // 35 m/s^3
-	const matrix::Vector3f da = a_cmd - _prev_a_cmd;
-	const float da_norm = da.norm();
-
-	if (da_norm > max_jerk * dt) {
-		a_cmd = _prev_a_cmd + (da / da_norm) * (max_jerk * dt);
-	}
-	_prev_a_cmd = a_cmd;
-
-	// 5. Takip Hız Setpointi (Trajectory Velocity Setpoint)
-	_sp_vel(2) = v_v(2);
-	_sp_vel_initialized = true;
-
-	// -------------------------------------------------------------------------
-	// D. Yaw Setpoint: Gövde burnu hedefin anlık gidiş vektörüne kilitlenir
-	// -------------------------------------------------------------------------
-	yaw_cmd = atan2f(u_t(1), u_t(0));
-
-	// -------------------------------------------------------------------------
-	// E. Ağ Atma Karar Mekanizması Kontrolü (Firing Envelope)
-	// -------------------------------------------------------------------------
-	CheckFiringEnvelope(r_v, self_vel, u_t);
+	CheckFiringEnvelope(r_v, self_vel, target_dir);
 }
 
 void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::Vector3f &self_vel, const matrix::Vector3f &u_t)
@@ -380,7 +456,7 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const matrix::Vector3f u_t_horiz = matrix::Vector3f(u_t(0), u_t(1), 0.0f).normalized();
 
 	// Firing envelope criteria:
-	// 1. Sanal sepete <= 2.2m yaklaşma (R_v <= 2.2m: net canister tactical deployment window)
+	// 1. Sanal sepete <= 2.2m yaklaşma (R_v <= 2.2m)
 	const bool pos_ok = (r_v.norm() <= 2.2f);
 	// 2. Hız farkı <= 2.5 m/s (hız eşitleme)
 	const bool vel_ok = ((self_vel - _target_vel).norm() <= 2.5f);
@@ -492,8 +568,13 @@ void Intercept::Run()
 	UpdateVisualDetection();
 
 	// Update 3-axis Storm32 gimbal tracking: continuously keep camera locked on target in world NED frame
+	// Active at all times (including on the ground before takeoff) as long as target GPS telemetry is available
 	if (_target_pos_valid) {
-		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+		const matrix::Vector3f self_pos(
+			PX4_ISFINITE(_local_pos.x) ? _local_pos.x : 0.0f,
+			PX4_ISFINITE(_local_pos.y) ? _local_pos.y : 0.0f,
+			PX4_ISFINITE(_local_pos.z) ? _local_pos.z : 0.0f
+		);
 		PublishGimbalTracking(self_pos);
 	}
 
@@ -507,46 +588,50 @@ void Intercept::Run()
 	// 7. Mode execution
 	if (_is_active) {
 		if (!_was_active) {
-			PX4_INFO("Intercept mode activated: initiating 3D Blended APN pursuit");
+			PX4_INFO("Intercept mode activated: initiating Lead-Pursuit & Basket Rendezvous");
 			_was_active = true;
 			_hold_valid = false;
-			_guidance_phase = GuidancePhase::APN_CRUISE;
+			_guidance_phase = GuidancePhase::APPROACH;
 			_pos_integral.zero();
 			_firing_counter = 0;
 			_net_fired = false;
-			_sp_vel_initialized = false;
+			_last_cmd_valid = false;
+			_speed_initialized = false;
+			_last_approach_dist = -1.0f;
+			_filt_closing_speed = 0.0f;
+			_last_approach_time = 0;
 		}
 
 		if (_target_pos_valid) {
-			matrix::Vector3f a_cmd;
+			matrix::Vector3f vel_cmd;
 			float yaw_cmd{_local_pos.heading};
 
 			// Low-altitude guard: if vehicle is below 2.5m altitude, perform vertical climb-out before forward tilt
 			const bool low_altitude_takeoff = (_local_pos.z_valid && _local_pos.z > -2.5f);
 
 			if (low_altitude_takeoff) {
-				a_cmd = matrix::Vector3f(0.0f, 0.0f, -3.0f);
+				vel_cmd = matrix::Vector3f(0.0f, 0.0f, -2.5f);
 				yaw_cmd = _local_pos.heading;
 			} else {
-				// Compute analytical 3D Blended APN + PID Rendezvous Guidance
-				ComputeBlendedAPNGuidance(a_cmd, yaw_cmd, dt);
+				// Compute Option A Hybrid Guidance: Lead-Pursuit Midcourse + 3D Basket Seating
+				ComputeGuidance(vel_cmd, yaw_cmd, dt);
+				_last_vel_cmd = vel_cmd;
+				_last_yaw_cmd = yaw_cmd;
+				_last_cmd_valid = true;
 			}
 
-			_last_a_cmd = a_cmd;
-			_last_yaw_cmd = yaw_cmd;
-
-			// Feedforward acceleration + vertical position setpoint (decoupled horizontal velocity eliminates limit-cycle oscillation)
+			// Publish pure velocity setpoints. With acceleration=NAN, PX4 pos-controller creates smooth, stable tilt!
 			trajectory_setpoint_s sp{};
 			sp.timestamp = now;
 			sp.position[0] = NAN;
 			sp.position[1] = NAN;
-			sp.position[2] = low_altitude_takeoff ? -3.0f : _p_v(2);
-			sp.acceleration[0] = a_cmd(0);
-			sp.acceleration[1] = a_cmd(1);
-			sp.acceleration[2] = low_altitude_takeoff ? -3.0f : _target_accel(2);
-			sp.velocity[0] = low_altitude_takeoff ? NAN : _sp_vel(0);
-			sp.velocity[1] = low_altitude_takeoff ? NAN : _sp_vel(1);
-			sp.velocity[2] = low_altitude_takeoff ? -2.0f : _v_v(2);
+			sp.position[2] = NAN;
+			sp.velocity[0] = vel_cmd(0);
+			sp.velocity[1] = vel_cmd(1);
+			sp.velocity[2] = vel_cmd(2);
+			sp.acceleration[0] = NAN;
+			sp.acceleration[1] = NAN;
+			sp.acceleration[2] = NAN;
 			sp.yaw = yaw_cmd;
 			sp.yawspeed = NAN;
 			_trajectory_setpoint_pub.publish(sp);
@@ -587,7 +672,11 @@ void Intercept::Run()
 			_guidance_phase = GuidancePhase::STANDBY;
 			_pos_integral.zero();
 			_firing_counter = 0;
-			_sp_vel_initialized = false;
+			_last_cmd_valid = false;
+			_speed_initialized = false;
+			_last_approach_dist = -1.0f;
+			_filt_closing_speed = 0.0f;
+			_last_approach_time = 0;
 		}
 	}
 }
@@ -601,9 +690,9 @@ int Intercept::print_status()
 
 	const char *phase_str = "STANDBY";
 	switch (_guidance_phase) {
-	case GuidancePhase::APN_CRUISE: phase_str = "APN_CRUISE (R_v > 5m)"; break;
-	case GuidancePhase::BLENDING:   phase_str = "BLENDING (2m < R_v <= 5m)"; break;
-	case GuidancePhase::RENDEZVOUS: phase_str = "RENDEZVOUS (R_v <= 2m)"; break;
+	case GuidancePhase::APPROACH:   phase_str = "APPROACH (Lead-Pursuit Midcourse)"; break;
+	case GuidancePhase::BLENDING:   phase_str = "BLENDING (Handover to Basket)"; break;
+	case GuidancePhase::RENDEZVOUS: phase_str = "RENDEZVOUS (Precision 3D Basket Seating)"; break;
 	case GuidancePhase::NET_FIRED:  phase_str = "NET_FIRED (TARGET CAPTURED!)"; break;
 	default: phase_str = "STANDBY"; break;
 	}
@@ -635,8 +724,11 @@ int Intercept::print_status()
 		PX4_INFO("Basket Vector r_v: [%.2f, %.2f, %.2f] m",
 			 (double)_last_r_v(0), (double)_last_r_v(1), (double)_last_r_v(2));
 
-		PX4_INFO("Command Accel: [%.2f, %.2f, %.2f] m/s^2, Yaw Cmd: %.1f deg",
-			 (double)_last_a_cmd(0), (double)_last_a_cmd(1), (double)_last_a_cmd(2),
+		PX4_INFO("Command Vel: [%.2f, %.2f, %.2f] m/s, Yaw Cmd: %.1f deg",
+			 (double)_last_vel_cmd(0), (double)_last_vel_cmd(1), (double)_last_vel_cmd(2),
+			 (double)math::degrees(_last_yaw_cmd));
+
+		PX4_INFO("Command Accel: [0.00, 0.00, 0.00] m/s^2, Yaw Cmd: %.1f deg",
 			 (double)math::degrees(_last_yaw_cmd));
 
 		PX4_INFO("Net Gun Status: %s (Envelope Counter: %u/10)",

@@ -63,9 +63,9 @@ class Intercept : public ModuleBase<Intercept>, public ModuleParams, public px4:
 public:
 	enum class GuidancePhase : uint8_t {
 		STANDBY = 0,
-		APN_CRUISE = 1,     // R_v > 5.0m: 3D Augmented Proportional Navigation
-		BLENDING = 2,       // 2.0m < R_v <= 5.0m: Smooth Blended Transition
-		RENDEZVOUS = 3,     // R_v <= 2.0m: Precision Capture Basket Seating & Velocity Matching PID
+		APPROACH = 1,       // Midcourse Lead-Pursuit Velocity Guidance (Rv > 20m)
+		BLENDING = 2,       // Transition (8m < Rv <= 20m): Smooth handover to basket
+		RENDEZVOUS = 3,     // Precision 3D Capture Basket Seating & Velocity Matching (Rv <= 8m)
 		NET_FIRED = 4       // Target Captured: Net gun deployed
 	};
 
@@ -95,7 +95,9 @@ private:
 	void ReplyToArmingCheck(uint8_t request_id);
 	void UpdateTarget(float dt);
 	void UpdateVisualDetection();
-	void ComputeBlendedAPNGuidance(matrix::Vector3f &a_cmd, float &yaw_cmd, float dt);
+	void ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt);
+	void ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt);
+	void ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt);
 	void CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::Vector3f &self_vel, const matrix::Vector3f &u_t);
 	void PublishGimbalTracking(const matrix::Vector3f &self_pos);
 
@@ -154,25 +156,31 @@ private:
 	};
 	TargetSource _target_source{TargetSource::NONE};
 
+	// Guidance state variables
 	matrix::Vector3f _p_v{};
 	matrix::Vector3f _v_v{};
 	matrix::Vector3f _pos_integral{};
-	matrix::Vector3f _last_a_cmd{};
-	matrix::Vector3f _prev_a_cmd{};
-	float _a_long_filtered{0.f};
+	matrix::Vector3f _last_vel_cmd{};
 	float _last_yaw_cmd{0.f};
+	bool _last_cmd_valid{false};
+
+	float _fwd_speed_cmd{35.0f};
+	float _fwd_accel_cmd{0.0f};
+	bool _speed_initialized{false};
+	float _last_approach_dist{-1.0f};
+	float _filt_closing_speed{0.0f};
+	hrt_abstime _last_approach_time{0};
+
 	float _last_R_v{0.f};
 	float _last_V_c{0.f};
 	matrix::Vector3f _last_r_v{};
-	matrix::Vector3f _sp_vel{};
-	bool _sp_vel_initialized{false};
 
 	// Net launcher firing envelope states
 	uint32_t _firing_counter{0};
 	bool _net_fired{false};
 	hrt_abstime _net_fire_time{0};
 
-	// Visual detection state (from camera seeker / pose model)
+	// Visual detection state (from camera seeker / solvePnP)
 	target_detection_s _target_detection{};
 	bool _visual_contact{false};
 	float _visual_range{0.f};
@@ -180,8 +188,12 @@ private:
 
 	DEFINE_PARAMETERS(
 		(ParamBool<px4::params::INT_ENABLE>) _param_int_enable,
-		(ParamFloat<px4::params::INT_APN_N>) _param_int_apn_n,
+		(ParamFloat<px4::params::INT_MIN_CLOSING>) _param_int_min_closing,
 		(ParamFloat<px4::params::INT_BASKET_D>) _param_int_basket_d,
-		(ParamFloat<px4::params::INT_ACC_MAX>) _param_int_acc_max
+		(ParamFloat<px4::params::INT_KP_Z_APP>) _param_int_kp_z_app,
+		(ParamFloat<px4::params::INT_YAW_RATE>) _param_int_yaw_rate,
+		(ParamFloat<px4::params::INT_APN_N>) _param_int_apn_n,
+		(ParamFloat<px4::params::INT_ACC_MAX>) _param_int_acc_max,
+		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor
 	)
 };

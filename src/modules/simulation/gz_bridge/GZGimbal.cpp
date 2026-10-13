@@ -91,9 +91,13 @@ void GZGimbal::Run()
 				    dt);
 		publishJointCommand(_gimbal_yaw_cmd_publisher, _yaw_stp, _yaw_rate_stp, _last_yaw_stp, _yaw_min, _yaw_max, dt);
 
-		const float pitch_gz = math::constrain(_last_pitch_stp, -math::radians(60.0f), math::radians(60.0f));
-		const float yaw_gz = math::constrain(_last_yaw_stp, -math::radians(45.0f), math::radians(45.0f));
-		const float roll_gz = math::constrain(_last_roll_stp, -math::radians(35.0f), math::radians(35.0f));
+		const float pitch_max_rad = math::radians(_mnt_range_pitch > 0.1f ? _mnt_range_pitch : 95.0f);
+		const float yaw_max_rad = math::radians(_mnt_range_yaw > 0.1f ? _mnt_range_yaw : 180.0f);
+		const float roll_max_rad = math::radians(_mnt_range_roll > 0.1f ? _mnt_range_roll : 45.0f);
+
+		const float pitch_gz = math::constrain(_last_pitch_stp, -pitch_max_rad, pitch_max_rad);
+		const float yaw_gz = math::constrain(_last_yaw_stp, -yaw_max_rad, yaw_max_rad);
+		const float roll_gz = math::constrain(_last_roll_stp, -roll_max_rad, roll_max_rad);
 
 		if (_seeker_pitch_cmd_publisher.Valid()) {
 			gz::msgs::Double msg_p;
@@ -198,9 +202,8 @@ bool GZGimbal::pollSetpoint()
 				const float y_b = -u_frd(1);
 				const float z_b = -u_frd(2);
 
-				const float z_fwd = math::max(z_b, 0.05f);
-				_pitch_stp = atan2f(x_b, z_fwd);
-				_yaw_stp = atan2f(y_b, z_fwd);
+				_pitch_stp = atan2f(x_b, z_b);
+				_yaw_stp = atan2f(y_b, z_b);
 				_roll_stp = 0.0f;
 			} else {
 				const matrix::Eulerf gimbal_att_stp(q_cmd);

@@ -77,6 +77,30 @@ TALON_BBOX_CORNERS = np.array([
     [-0.65, -0.86, -0.10],
 ])
 
+# Canonical 3D landmark keypoints of Talon 1718 in body FLU frame (x fwd, y left, z up)
+TALON_KEYPOINTS_3D = np.array([
+    [ 0.527,  0.000, -0.022],  # 0: NOSE
+    [-0.149,  0.859,  0.062],  # 1: L_WING (Left wingtip)
+    [-0.150, -0.859,  0.062],  # 2: R_WING (Right wingtip)
+    [-0.598,  0.000, -0.028],  # 3: TAIL (Fuselage tail end)
+    [-0.539,  0.223,  0.198],  # 4: VT_L (V-Tail left fin tip)
+    [-0.539, -0.223,  0.198],  # 5: VT_R (V-Tail right fin tip)
+    [ 0.000,  0.000,  0.000],  # 6: CG (Fuselage center)
+], dtype=np.float64)
+
+TALON_KEYPOINT_NAMES = ["NOSE", "L_WING", "R_WING", "TAIL", "VT_L", "VT_R", "CG"]
+
+TALON_WIREFRAME_EDGES = [
+    (0, 6),  # Nose to CG
+    (6, 3),  # CG to Tail
+    (6, 1),  # CG to Left Wingtip
+    (6, 2),  # CG to Right Wingtip
+    (3, 4),  # Tail to Left V-Tail
+    (3, 5),  # Tail to Right V-Tail
+    (1, 4),  # Left Wing to Left V-Tail
+    (2, 5),  # Right Wing to Right V-Tail
+]
+
 # PX4 custom mode (main_mode, sub_mode) -> name, see src/modules/commander/px4_custom_mode.h
 PX4_MODE_NAMES = {
     (1, 0): "MANUAL", (2, 0): "ALTITUDE", (3, 0): "POSITION", (3, 1): "ORBIT", (3, 2): "POSITION SLOW",
@@ -521,9 +545,58 @@ def draw_hud(img, tracking_data, width, height):
                 cv2.line(img, p1, p2, SHADOW, 3, cv2.LINE_AA)
                 cv2.line(img, p1, p2, HUD, 1, cv2.LINE_AA)
 
-            # Target distance under bbox (centered horizontally on the box)
+            # 3D Landmark Keypoints & Structural Wireframe Skeleton
+            kpts = tracking_data.get("keypoints_2d")
+            if kpts is not None and range_m <= 60.0:
+                # 1. Draw wireframe skeleton lines between landmarks
+                for i1, i2 in TALON_WIREFRAME_EDGES:
+                    if i1 < len(kpts) and i2 < len(kpts):
+                        pt1 = (int(round(kpts[i1, 0])), int(round(kpts[i1, 1])))
+                        pt2 = (int(round(kpts[i2, 0])), int(round(kpts[i2, 1])))
+                        cv2.line(img, pt1, pt2, (0, 0, 0), 2, cv2.LINE_AA)
+                        cv2.line(img, pt1, pt2, (0, 220, 255), 1, cv2.LINE_AA)
+
+                # 2. Draw keypoint landmark points & labels
+                for idx, pt in enumerate(kpts):
+                    px, py = int(round(pt[0])), int(round(pt[1]))
+                    # Yellow center dot with dark shadow
+                    cv2.circle(img, (px, py), 3, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.circle(img, (px, py), 2, (0, 255, 255), -1, cv2.LINE_AA)
+
+                    if range_m <= 35.0:
+                        name = TALON_KEYPOINT_NAMES[idx]
+                        hud_text(img, name, (px + 4, py - 4), 0.28, "left", color=(0, 255, 255))
+
+            # Target distance & solvePnP distance comparison under bbox
             u_box_c = (u_min + u_max) // 2
-            hud_text(img, f"{range_m:.1f}m", (u_box_c, v_max + 14), 0.45, "center", color=HUD)
+            pnp_rng = tracking_data.get("pnp_range_m")
+            if pnp_rng is not None:
+                hud_text(img, f"GT:{range_m:.1f}m | PnP:{pnp_rng:.1f}m", (u_box_c, v_max + 14), 0.38, "center", color=HUD)
+            else:
+                hud_text(img, f"{range_m:.1f}m", (u_box_c, v_max + 14), 0.45, "center", color=HUD)
+    else:
+        # Off-Boresight Target Locator: points toward target outside camera FOV
+        dx = float(u_c - cx)
+        dy = float(v_c - cy)
+        angle = math.atan2(dy, dx)
+        margin = 35
+        # Intersect vector with screen border
+        scale_x = (width / 2 - margin) / max(abs(dx), 1e-4)
+        scale_y = (height / 2 - margin) / max(abs(dy), 1e-4)
+        scale = min(scale_x, scale_y)
+        edge_x = int(cx + dx * scale)
+        edge_y = int(cy + dy * scale)
+
+        # Draw off-boresight directional chevron arrow
+        arrow_len = 14
+        p_tip = (edge_x, edge_y)
+        p_b1 = (int(edge_x - arrow_len * math.cos(angle - 0.5)), int(edge_y - arrow_len * math.sin(angle - 0.5)))
+        p_b2 = (int(edge_x - arrow_len * math.cos(angle + 0.5)), int(edge_y - arrow_len * math.sin(angle + 0.5)))
+        cv2.line(img, p_tip, p_b1, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(img, p_tip, p_b2, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(img, p_tip, p_b1, HUD, 2, cv2.LINE_AA)
+        cv2.line(img, p_tip, p_b2, HUD, 2, cv2.LINE_AA)
+        hud_text(img, f"TGT {range_m:.1f}m", (edge_x, edge_y + 14), 0.38, "center", color=HUD)
 
 
 def main():
@@ -751,7 +824,34 @@ def main():
                     tracking_data["in_fov"] = (0 <= cx_px < width and 0 <= cy_px < height)
                     tracking_data["locked"] = True
                     tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
-            elif pt is not None:
+
+            # Compute landmark keypoints and solvePnP whenever target pose is available
+            if pt is not None:
+                R_tgt = quat_to_rot(pt.orientation.w, pt.orientation.x, pt.orientation.y, pt.orientation.z)
+                p_tgt = np.array([pt.position.x, pt.position.y, pt.position.z])
+
+                kpts_world = (R_tgt @ TALON_KEYPOINTS_3D.T).T + p_tgt
+                kpts_rel = kpts_world - p_cam_world
+                kpts_cam = (R_cam_opt_world @ kpts_rel.T).T
+
+                if np.all(kpts_cam[:, 2] > 0.1):
+                    u_kpts = fx * kpts_cam[:, 0] / kpts_cam[:, 2] + cx
+                    v_kpts = fy * kpts_cam[:, 1] / kpts_cam[:, 2] + cy
+                    kpts_2d = np.column_stack((u_kpts, v_kpts)).astype(np.float64)
+                    tracking_data["keypoints_2d"] = kpts_2d
+
+                    K_mat = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+                    try:
+                        success, rvec_est, tvec_est = cv2.solvePnP(
+                            TALON_KEYPOINTS_3D, kpts_2d, K_mat, np.zeros(4, dtype=np.float64),
+                            flags=cv2.SOLVEPNP_ITERATIVE
+                        )
+                        if success:
+                            tracking_data["pnp_range_m"] = float(np.linalg.norm(tvec_est))
+                    except Exception:
+                        pass
+
+            if not det_active and pt is not None:
                 # Geometric projection fallback from ground truth poses
                 R_tgt = quat_to_rot(pt.orientation.w, pt.orientation.x, pt.orientation.y, pt.orientation.z)
                 p_tgt = np.array([pt.position.x, pt.position.y, pt.position.z])

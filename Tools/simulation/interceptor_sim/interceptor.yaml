@@ -68,12 +68,12 @@ camera:                 # nose seeker camera, streamed on udp 5600 by plugins/ca
   detect_port: 15600    # udp port of target_vision driver
   offset_x: -0.038      # mounted on Storm32 3-axis gimbal (-X = -3.8 cm, dorsal / TOP in forward flight)
 
-gimbal:                 # Storm32 3-axis lightweight brushless gimbal (yaw +/-45, roll +/-35, pitch -45..+60 deg)
+gimbal:                 # Storm32 3-axis continuous seeker gimbal (pan +/-180, roll +/-45, tilt +/-95 deg)
   enabled: true
   type: "storm32_3axis"
-  yaw_limit_deg: 45     # azimuth/pan rotation (+/-45 deg)
-  roll_limit_deg: 35    # roll stabilization rotation (+/-35 deg)
-  pitch_limit_deg: 60   # elevation/tilt rotation (-45..+60 deg)
+  yaw_limit_deg: 180    # full azimuth pan tracking (+/-180 deg)
+  roll_limit_deg: 45    # roll stabilization rotation (+/-45 deg)
+  pitch_limit_deg: 95   # full elevation tilt from vertical nose down to horizon (+/-95 deg)
   mass: 0.304           # Storm32 gimbal mass (304 g)
   size: [0.08, 0.08, 0.10] # 80x80x100 mm dimensions
   offset_x: -0.038      # dorsal / TOP nose deck mount near outer rim (-X = -3.8 cm)

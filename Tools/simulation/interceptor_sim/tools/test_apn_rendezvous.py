@@ -27,6 +27,7 @@ os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import time
 import math
+import re
 import json
 import csv
 import urllib.request
@@ -42,6 +43,7 @@ try:
     from gz.msgs10.clock_pb2 import Clock
     from gz.msgs10.double_pb2 import Double
     from gz.msgs10.double_v_pb2 import Double_V
+    from gz.msgs10.imu_pb2 import IMU
 except ImportError:
     pass
 
@@ -127,6 +129,15 @@ class HighRateTelemetryRecorder:
         self.net_fired = False
         self.firing_counter = 0
 
+        # Camera Seeker detection state
+        self.cam_detected = 0
+        self.cam_range_m = 0.0
+        self.cam_bbox = [0.0, 0.0, 0.0, 0.0]
+        self.cam_last_rx = 0.0
+
+        # Gyroscope angular rate state (deg/s)
+        self.gyro_rates_dps = np.zeros(3)
+
         # Gazebo node
         self.node = Node()
         self.node.subscribe(Clock, "/world/ankara/clock", self._on_clock)
@@ -135,6 +146,8 @@ class HighRateTelemetryRecorder:
         self.node.subscribe(Double, "/model/interceptor_0/command/seeker_pitch", self._on_gmb_pitch)
         self.node.subscribe(Double, "/model/interceptor_0/command/seeker_roll", self._on_gmb_roll)
         self.node.subscribe(Double, "/model/interceptor_0/command/net_launcher_pitch", self._on_barrel_pitch)
+        self.node.subscribe(Double_V, "/model/interceptor_0/detection", self._on_detection)
+        self.node.subscribe(IMU, "/world/ankara/model/interceptor_0/link/base_link/sensor/imu_sensor/imu", self._on_imu)
 
         # MAVLink listener thread
         self.mav_thread = None
@@ -158,6 +171,22 @@ class HighRateTelemetryRecorder:
     def _on_barrel_pitch(self, msg):
         with self.lock:
             self.cmd_barrel_pitch = msg.data
+
+    def _on_detection(self, msg):
+        with self.lock:
+            if len(msg.data) >= 6:
+                self.cam_bbox = [float(msg.data[0]), float(msg.data[1]), float(msg.data[2]), float(msg.data[3])]
+                self.cam_range_m = float(msg.data[4])
+                self.cam_detected = 1 if msg.data[5] > 0.5 else 0
+                self.cam_last_rx = self.sim_time
+
+    def _on_imu(self, msg):
+        with self.lock:
+            # Body FLU (rad/s) -> Body FRD (deg/s)
+            wx = math.degrees(msg.angular_velocity.x)
+            wy = -math.degrees(msg.angular_velocity.y)
+            wz = -math.degrees(msg.angular_velocity.z)
+            self.gyro_rates_dps = np.array([wx, wy, wz])
 
     def _on_poses(self, msg):
         now = self.sim_time
@@ -195,13 +224,22 @@ class HighRateTelemetryRecorder:
                     parts = line.split(",")
                     self.target_source = parts[0].split(":")[-1].strip()
                 if "Target Distance:" in line:
-                    # Target Distance: 45.2 m (age: 0.05s), Basket Dist R_v: 42.80 m, V_c: 12.4 m/s
-                    parts = line.split(",")
-                    if len(parts) >= 3:
+                    m_tgt = re.search(r"Target Distance:\s*([0-9\.\-]+)\s*m", line)
+                    if m_tgt:
                         try:
-                            self.target_rt = float(parts[0].split(":")[-1].split("m")[0].strip())
-                            self.basket_rv = float(parts[1].split(":")[-1].split("m")[0].strip())
-                            self.closing_vc = float(parts[2].split(":")[-1].split("m")[0].strip())
+                            self.target_rt = float(m_tgt.group(1))
+                        except ValueError:
+                            pass
+                    m_rv = re.search(r"Basket Dist R_v:\s*([0-9\.\-]+)\s*m", line)
+                    if m_rv:
+                        try:
+                            self.basket_rv = float(m_rv.group(1))
+                        except ValueError:
+                            pass
+                    m_vc = re.search(r"V_c:\s*([0-9\.\-]+)\s*m/s", line)
+                    if m_vc:
+                        try:
+                            self.closing_vc = float(m_vc.group(1))
                         except ValueError:
                             pass
                 if "Net Gun Status:" in line:
@@ -213,13 +251,19 @@ class HighRateTelemetryRecorder:
                         except ValueError:
                             pass
                 if "Command Accel:" in line:
-                    # Command Accel: [2.50, -1.20, 0.30] m/s^2, Yaw Cmd: 45.2 deg
                     try:
                         acc_part = line.split("Command Accel: [")[1].split("]")[0]
                         acc_vals = [float(x.strip()) for x in acc_part.split(",")]
                         self.cmd_acc = np.array(acc_vals)
                         yaw_part = line.split("Yaw Cmd:")[-1].split("deg")[0].strip()
                         self.cmd_yaw = float(yaw_part)
+                    except Exception:
+                        pass
+                if "Command Vel:" in line:
+                    try:
+                        vel_part = line.split("Command Vel: [")[1].split("]")[0]
+                        vel_vals = [float(x.strip()) for x in vel_part.split(",")]
+                        self.cmd_vel = np.array(vel_vals)
                     except Exception:
                         pass
 
@@ -345,6 +389,20 @@ class HighRateTelemetryRecorder:
                     "act_gmb_yaw_deg": round(act_gmb_yaw, 1),
                     "act_barrel_pitch_deg": round(act_bar_pitch, 1),
 
+                    # Camera Seeker & Visual Pose Detection
+                    "cam_detected": self.cam_detected if (t - self.cam_last_rx < 0.6) else 0,
+                    "cam_range_m": round(self.cam_range_m, 2) if (t - self.cam_last_rx < 0.6) else 0.0,
+                    "cam_bbox_cx": round(self.cam_bbox[0], 3),
+                    "cam_bbox_cy": round(self.cam_bbox[1], 3),
+                    "cam_bbox_w": round(self.cam_bbox[2], 3),
+                    "cam_bbox_h": round(self.cam_bbox[3], 3),
+
+                    # Drone Gyroscope Angular Rates (Body FRD [deg/s])
+                    "gyro_roll_rate_dps": round(float(self.gyro_rates_dps[0]), 2),
+                    "gyro_pitch_rate_dps": round(float(self.gyro_rates_dps[1]), 2),
+                    "gyro_yaw_rate_dps": round(float(self.gyro_rates_dps[2]), 2),
+                    "gyro_rate_norm_dps": round(float(np.linalg.norm(self.gyro_rates_dps)), 2),
+
                     # Relative Geometry & Capture Envelope
                     "target_dist_rt": round(self.target_rt, 2),
                     "basket_dist_rv": round(self.basket_rv, 2),
@@ -404,6 +462,14 @@ class HighRateTelemetryRecorder:
         mean_tilt = float(np.mean(int_tilts)) if int_tilts else 0.0
         std_tilt = float(np.std(int_tilts)) if int_tilts else 0.0
 
+        gyro_norms = [r.get("gyro_rate_norm_dps", 0.0) for r in active_rec]
+        max_gyro = max(gyro_norms) if gyro_norms else 0.0
+        mean_gyro = float(np.mean(gyro_norms)) if gyro_norms else 0.0
+        std_gyro = float(np.std(gyro_norms)) if gyro_norms else 0.0
+
+        cam_detected_frames = sum(1 for r in active_rec if r.get("cam_detected", 0) == 1)
+        cam_ratio = (cam_detected_frames / len(active_rec)) if active_rec else 0.0
+
         return {
             "duration_s": round(duration_s, 1),
             "sample_count": len(rec),
@@ -411,8 +477,12 @@ class HighRateTelemetryRecorder:
             "mean_tilt_deg": round(mean_tilt, 1),
             "max_tilt_deg": round(max_tilt, 1),
             "std_tilt_deg": round(std_tilt, 1),
+            "max_gyro_rate_dps": round(max_gyro, 1),
+            "mean_gyro_rate_dps": round(mean_gyro, 1),
+            "std_gyro_rate_dps": round(std_gyro, 1),
+            "cam_track_ratio": round(cam_ratio, 3),
             "pitch_reversal_rate_hz": round(reversal_rate_hz, 2),
-            "smooth_flight_verified": (reversal_rate_hz < 1.2 and std_tilt < 12.0),
+            "smooth_flight_verified": (reversal_rate_hz < 1.2 and std_tilt < 12.0 and max_gyro < 120.0),
             "net_fired": any(r["net_fired"] == 1 for r in rec)
         }
 
@@ -619,12 +689,17 @@ def main():
         print(f"   - Maksimum Eğim Açısı: {analysis.get('max_tilt_deg', 0):.1f}°")
         print(f"   - Eğim Standart Sapması (Dalgalanma): {analysis.get('std_tilt_deg', 0):.1f}°")
         print(f"   - Pitch Yön Değiştirme Frekansı: {analysis.get('pitch_reversal_rate_hz', 0):.2f} Hz")
-        if analysis.get("smooth_flight_verified", False):
-            print("   -> DOĞRULAMA BAŞARILI: Gövdede aşağı-yukarı yunuslama (pitch hunting / limit cycle) OLMAMIŞTIR.")
-        else:
-            print("   -> DİKKAT: Gövde eğiminde dalgalanma gözlemlendi.")
 
-        print(f"\n4. Sepete Yaklaşma ve Ağ Atma Performansı:")
+        print("\n4. Jiroskop (Açısal Hız) ve Kamera Takip Kararlılığı:")
+        print(f"   - Ortalama Jiroskop Hızı: {analysis.get('mean_gyro_rate_dps', 0):.1f} °/s")
+        print(f"   - Maksimum Jiroskop Tepe Değeri (Peak Rate): {analysis.get('max_gyro_rate_dps', 0):.1f} °/s")
+        print(f"   - Kamera Optik Kilitlenme Oranı: {analysis.get('cam_track_ratio', 0)*100:.1f} %")
+        if analysis.get('max_gyro_rate_dps', 0) < 120.0:
+            print("   -> JİROSKOP DOĞRULAMASI: Kararlı (aşırı açısal hız veya yalpalama yok).")
+        else:
+            print("   -> DİKKAT: Yüksek açısal hız tepkisi tespit edildi.")
+
+        print(f"\n5. Sepete Yaklaşma ve Ağ Atma Performansı:")
         print(f"   - En Yakın Sepet Mesafesi (Min R_v): {analysis.get('min_basket_rv_m', 999):.2f} m")
         print(f"   - Ağ Atış (Firing Envelope) Durumu: {'BAŞARILI (HEDEF YAKALANDI)' if net_fired else 'TAMAMLANMADI'}")
         if net_fired:
