@@ -289,16 +289,18 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 
 	_fwd_speed_cmd += _fwd_accel_cmd * dt;
 	const float min_approach_speed = math::max(target_speed + min_closing, 15.0f);
-	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 42.0f);
+	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 44.0f);
 
-	// 4. Virtual aim point 25m behind target along flight line with Lead-Pursuit
+	// 4. Virtual aim point 25m behind target along flight line with 2nd-order Curvature Lead-Pursuit
 	const float dist_behind = 25.0f;
 	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
 	const matrix::Vector3f to_aim = aim_point - self_pos;
 	const float dist_to_aim = to_aim.norm();
 	const float time_to_aim = dist_to_aim / math::max(_fwd_speed_cmd, 10.0f);
 
-	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim;
+	// 2nd-order turn acceleration compensation anticipates curved flight path in turns and S-weaves
+	const float t_acc = math::min(time_to_aim, 2.5f);
+	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim + _target_accel * (0.5f * t_acc * t_acc);
 	const matrix::Vector3f to_intercept = intercept_point - self_pos;
 
 	// 5. Horizontal velocity setpoint in inertial NED with MPC_ACC_HOR slew limiting
@@ -326,13 +328,13 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		vel_cmd(1) = desired_vy;
 	}
 
-	// 6. Altitude tracking in Approach mode
+	// 6. Altitude tracking in Approach mode (Extended to -7.0 m/s climb to match high-speed zoom climbs)
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
 	const float K_z_p = _param_int_kp_z_app.get();
-	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -3.5f, 2.5f);
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.0f, 4.5f);
 
-	const float max_dvz = 2.0f * dt;
+	const float max_dvz = 4.0f * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(2) = math::constrain(vz_desired, _last_vel_cmd(2) - max_dvz, _last_vel_cmd(2) + max_dvz);
 	} else {
