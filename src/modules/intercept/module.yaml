@@ -25,7 +25,7 @@ parameters:
                 short: Capture basket offset behind target
                 long: Distance in meters behind target flight line for virtual capture basket.
             type: float
-            default: 2.5
+            default: 3.5
             min: 1.0
             max: 10.0
             decimal: 1

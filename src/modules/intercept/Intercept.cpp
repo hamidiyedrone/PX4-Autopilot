@@ -140,6 +140,7 @@ void Intercept::UpdateTarget(float dt)
 	}
 
 	bool new_sample_processed = false;
+	const hrt_abstime now = hrt_absolute_time();
 
 	if (_has_follow_target && _map_ref.isInitialized()
 	    && PX4_ISFINITE(_last_follow_target.lat) && PX4_ISFINITE(_last_follow_target.lon)) {
@@ -151,7 +152,6 @@ void Intercept::UpdateTarget(float dt)
 			float y{0.f};
 			_map_ref.project(_last_follow_target.lat, _last_follow_target.lon, x, y);
 
-			const hrt_abstime now = hrt_absolute_time();
 			const matrix::Vector3f new_target_vel(_last_follow_target.vx, _last_follow_target.vy, _last_follow_target.vz);
 
 			if (_last_target_update > 0 && now > _last_target_update) {
@@ -177,33 +177,24 @@ void Intercept::UpdateTarget(float dt)
 		}
 	}
 
-	if (!new_sample_processed) {
+	// 2. Optical Seeker direct lock: active whenever camera detects target within visual range
+	if (_visual_contact && _target_detection.range_valid
+	    && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)) {
+		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+		const matrix::Vector3f los_b(_target_detection.los_body[0], _target_detection.los_body[1], _target_detection.los_body[2]);
+		const matrix::Quatf q_att(_vehicle_attitude.q);
+		const matrix::Vector3f los_ned = q_att.rotateVector(los_b);
+		const matrix::Vector3f vis_target_pos = self_pos + los_ned * _target_detection.range_m;
+
+		_target_pos = vis_target_pos;
+		_target_pos_valid = true;
+		_target_source = TargetSource::VISION;
+		_last_target_update = now;
+
+	} else if (!new_sample_processed) {
 		const bool follow_target_fresh = _has_follow_target && (hrt_elapsed_time(&_last_target_rx_time) < 1_s);
 
-		if (!follow_target_fresh && _visual_contact && _target_detection.range_valid
-		    && PX4_ISFINITE(_local_pos.x) && PX4_ISFINITE(_local_pos.y) && PX4_ISFINITE(_local_pos.z)) {
-			// Visual tracking active as resilient fallback when GPS follow_target is stale/unavailable
-			const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
-			const matrix::Vector3f los_b(_target_detection.los_body[0], _target_detection.los_body[1], _target_detection.los_body[2]);
-			const matrix::Quatf q_att(_vehicle_attitude.q);
-			const matrix::Vector3f los_ned = q_att.rotateVector(los_b);
-			const matrix::Vector3f vis_target_pos = self_pos + los_ned * _target_detection.range_m;
-
-			const hrt_abstime now = hrt_absolute_time();
-			if (_last_target_update > 0 && now > _last_target_update) {
-				const float dt_meas = (float)(now - _last_target_update) * 1e-6f;
-				if (dt_meas > 0.005f && dt_meas < 1.0f) {
-					const matrix::Vector3f raw_vel = (vis_target_pos - _target_pos) / dt_meas;
-					_target_vel = _target_vel * 0.7f + raw_vel * 0.3f;
-				}
-			}
-
-			_target_pos = vis_target_pos;
-			_target_pos_valid = true;
-			_target_source = TargetSource::VISION;
-			_last_target_update = now;
-
-		} else if (follow_target_fresh && _target_pos_valid && dt > 0.001f && dt < 0.05f) {
+		if (follow_target_fresh && _target_pos_valid && dt > 0.001f && dt < 0.05f) {
 			// 100 Hz kinematic dead-reckoning extrapolation between target telemetry frames
 			_target_pos += _target_vel * dt + _target_accel * (0.5f * dt * dt);
 			_target_vel += _target_accel * dt;
@@ -268,40 +259,22 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		target_dir = _target_vel / target_speed;
 	}
 
-	// 3. Smooth closing speed profile: gentle deceleration tapering inside 90m
-	const float min_closing = _param_int_min_closing.get(); // default 5.0 m/s
-	if (dist_to_target > 90.0f) {
-		// Fast pursuit cruise towards 42 m/s
-		_fwd_accel_cmd = 4.0f;
-	} else {
-		// Inside 90m: closing speed smoothly tapers down to min_closing at 20m
-		const float desired_closing = min_closing + (dist_to_target - 20.0f) * 0.15f;
-		const float closing_err = _filt_closing_speed - desired_closing;
-		const float max_braking = (target_speed > 30.0f) ? -2.0f : -4.0f;
+	const float d_offset = _param_int_basket_d.get();
 
-		if (closing_err > 0.0f) {
-			_fwd_accel_cmd = math::constrain(-1.0f - 0.25f * closing_err, max_braking, -0.4f);
-		} else if (closing_err < -2.0f) {
-			_fwd_accel_cmd = 2.5f;
-		} else {
-			_fwd_accel_cmd = 0.0f;
-		}
-	}
+	// 3. Smooth approach speed profile:
+	// When far (> 50m): sprint towards target_speed + 12 m/s
+	// When approaching (50m down to 18m): smoothly decelerate towards target_speed + 2.5 m/s
+	const float dist_to_basket = math::max(0.0f, dist_to_target - d_offset);
+	const float desired_closing = math::constrain(sqrtf(2.0f * 1.5f * dist_to_basket), 2.0f, 14.0f);
+	_fwd_speed_cmd = math::constrain(target_speed + desired_closing, 15.0f, 44.0f);
 
-	_fwd_speed_cmd += _fwd_accel_cmd * dt;
-	const float min_approach_speed = math::max(target_speed + min_closing, 15.0f);
-	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 44.0f);
-
-	// 4. Dynamic aim point behind target: smoothly tapers from 25m down to 2.5m as distance closes
-	const float d_offset = _param_int_basket_d.get(); // 2.5m
-	const float dist_behind = math::constrain(d_offset + (dist_to_target - 15.0f) * 0.35f, d_offset, 25.0f);
-	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
+	// 4. Virtual aim point at the basket with 2nd-order turn acceleration compensation
+	const matrix::Vector3f aim_point = _target_pos - target_dir * d_offset;
 	const matrix::Vector3f to_aim = aim_point - self_pos;
 	const float dist_to_aim = to_aim.norm();
 	const float time_to_aim = dist_to_aim / math::max(_fwd_speed_cmd, 10.0f);
 
-	// 2nd-order turn acceleration compensation anticipates curved flight path in turns and S-weaves
-	const float t_acc = math::min(time_to_aim, 2.5f);
+	const float t_acc = math::min(time_to_aim, 2.0f);
 	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim + _target_accel * (0.5f * t_acc * t_acc);
 	const matrix::Vector3f to_intercept = intercept_point - self_pos;
 
@@ -320,7 +293,7 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		desired_vy = target_dir(1) * _fwd_speed_cmd;
 	}
 
-	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 22.0f);
+	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 20.0f);
 	const float max_dvh = max_acc_hor * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
@@ -360,32 +333,53 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float dt)
 {
 	const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+	const matrix::Vector3f self_vel(_local_pos.vx, _local_pos.vy, _local_pos.vz);
 	const float target_speed = _target_vel.norm();
 	matrix::Vector3f target_dir(1.0f, 0.0f, 0.0f);
 	if (target_speed > 1.0f) {
 		target_dir = _target_vel / target_speed;
 	}
 
-	const float d_offset = _param_int_basket_d.get(); // 2.5m
+	const float d_offset = _param_int_basket_d.get(); // 3.5m safe standoff distance
 	const matrix::Vector3f p_v = _target_pos - (target_dir * d_offset);
 	const matrix::Vector3f r_v = p_v - self_pos;
+	const matrix::Vector3f v_rel = self_vel - _target_vel; // relative velocity (drone - target)
 
-	// Integrate basket position error with anti-windup
-	_pos_integral(0) = math::constrain(_pos_integral(0) + r_v(0) * dt, -3.0f, 3.0f);
-	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -3.0f, 3.0f);
-	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -2.0f, 2.0f);
+	// Decompose position error into along-track (parallel to target_dir) and cross-track
+	const float r_along = r_v.dot(target_dir); // > 0 means drone is behind basket
+	const matrix::Vector3f r_cross = r_v - target_dir * r_along;
 
-	// Velocity matching + position seating PID + centripetal turn acceleration feedforward
-	// Target acceleration feedforward a_t * tau_lead eliminates steady-state lag (e_ss = a_t / Kp) in sustained turns
-	const float tau_lead = 0.50f;
-	const matrix::Vector3f v_corr(
-		math::constrain(1.8f * r_v(0) + 0.30f * _pos_integral(0) + _target_accel(0) * tau_lead, -12.0f, 12.0f),
-		math::constrain(1.8f * r_v(1) + 0.30f * _pos_integral(1) + _target_accel(1) * tau_lead, -12.0f, 12.0f),
-		math::constrain(1.4f * r_v(2) + 0.20f * _pos_integral(2) + _target_accel(2) * 0.30f, -5.0f, 5.0f)
+	// Integrate cross-track position error with anti-windup (steady-state wind drift)
+	_pos_integral(0) = math::constrain(_pos_integral(0) + r_cross(0) * dt, -1.5f, 1.5f);
+	_pos_integral(1) = math::constrain(_pos_integral(1) + r_cross(1) * dt, -1.5f, 1.5f);
+	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -1.5f, 1.5f);
+
+	// Along-track: smooth, critically damped approach to basket with sqrt deceleration curve
+	float v_along_corr = 0.0f;
+	const float v_along_rel = v_rel.dot(target_dir); // current closing rate
+
+	if (r_along > 0.0f) {
+		// Behind basket: smoothly approach with strong damping on closing rate to prevent overshoot
+		const float v_close_des = math::min(4.5f, sqrtf(2.0f * 1.5f * r_along));
+		const float v_err = v_close_des - v_along_rel;
+		v_along_corr = math::constrain(1.2f * v_err, -3.0f, 5.0f);
+	} else {
+		// In front of basket: brake immediately to restore safe standoff distance!
+		v_along_corr = math::constrain(1.5f * r_along - 0.8f * v_along_rel, -6.0f, 0.0f);
+	}
+
+	// Cross-track and vertical PD tracking with turn acceleration feedforward
+	const float tau_lead = 0.40f;
+	const matrix::Vector3f v_cross_corr(
+		1.5f * r_cross(0) - 0.7f * (v_rel(0) - target_dir(0) * v_along_rel) + 0.15f * _pos_integral(0) + _target_accel(0) * tau_lead,
+		1.5f * r_cross(1) - 0.7f * (v_rel(1) - target_dir(1) * v_along_rel) + 0.15f * _pos_integral(1) + _target_accel(1) * tau_lead,
+		1.4f * r_v(2) - 0.6f * v_rel(2) + 0.15f * _pos_integral(2) + _target_accel(2) * 0.30f
 	);
+
+	const matrix::Vector3f v_corr = target_dir * v_along_corr + v_cross_corr;
 	const matrix::Vector3f v_rdv = _target_vel + v_corr;
 
-	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 22.0f);
+	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 20.0f);
 	const float max_dvh = max_acc_hor * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(0) = math::constrain(v_rdv(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
@@ -417,7 +411,7 @@ void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float
 		target_dir = _target_vel / target_speed;
 	}
 
-	const float d_offset = _param_int_basket_d.get(); // 2.5m
+	const float d_offset = _param_int_basket_d.get(); // 3.5m safe standoff distance
 	const matrix::Vector3f p_v = _target_pos - (target_dir * d_offset);
 	_p_v = p_v;
 	_v_v = _target_vel;
@@ -430,6 +424,15 @@ void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float
 	_last_r_v = r_v;
 	_last_V_c = -(r_v.dot(v_rel)) / math::max(R_v, 0.01f);
 
+	if (_net_fired) {
+		// Target successfully captured: do NOT ram into falling target!
+		// Maintain level altitude and smoothly back off to observe capture safely
+		vel_cmd = target_dir * math::max(target_speed - 5.0f, 10.0f);
+		vel_cmd(2) = 0.0f;
+		yaw_cmd = atan2f(target_dir(1), target_dir(0));
+		return;
+	}
+
 	matrix::Vector3f vel_midcourse;
 	float yaw_midcourse{_local_pos.heading};
 	ComputeMidcourseGuidance(vel_midcourse, yaw_midcourse, dt);
@@ -438,19 +441,19 @@ void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float
 	float yaw_basket{_local_pos.heading};
 	ComputeBasketGuidance(vel_basket, yaw_basket, dt);
 
-	// Smooth blending between Midcourse Lead-Pursuit (Rv > 14m) and Basket Seating (Rv <= 5m)
-	const float w = math::constrain((R_v - 5.0f) / 9.0f, 0.0f, 1.0f);
+	// Smooth blending between Midcourse Lead-Pursuit (Rv > 18m) and Basket Seating (Rv <= 6m)
+	const float w = math::constrain((R_v - 6.0f) / 12.0f, 0.0f, 1.0f);
 	vel_cmd = (vel_midcourse * w) + (vel_basket * (1.0f - w));
 
 	const float dyaw = matrix::wrap_pi(yaw_basket - yaw_midcourse);
 	yaw_cmd = matrix::wrap_pi(yaw_midcourse + dyaw * (1.0f - w));
 
-	if (R_v > 14.0f) {
+	if (R_v > 18.0f) {
 		_guidance_phase = GuidancePhase::APPROACH;
-	} else if (R_v > 5.0f) {
+	} else if (R_v > 6.0f) {
 		_guidance_phase = GuidancePhase::BLENDING;
 	} else {
-		_guidance_phase = _net_fired ? GuidancePhase::NET_FIRED : GuidancePhase::RENDEZVOUS;
+		_guidance_phase = GuidancePhase::RENDEZVOUS;
 	}
 
 	CheckFiringEnvelope(r_v, self_vel, target_dir);
@@ -465,12 +468,12 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const float vel_diff = (self_vel - _target_vel).norm();
 	const float align_dot = self_fwd.dot(u_t_horiz);
 
-	// Tactical Two-Tier Firing Envelope:
-	// Tier 1: Precision Basket Seating (Rv <= 3.8m, vel match <= 5.0 m/s, forward alignment >= 0.80 [~36 deg])
-	const bool matched_seating = (rv_dist <= 3.8f) && (vel_diff <= 5.0f) && (align_dot >= 0.80f);
+	// Safe Tactical Two-Tier Firing Envelope with d_offset = 3.5m:
+	// Tier 1 (Basket Seating): Rv <= 2.2m (meaning 1.3m to 5.7m from target), vel match <= 3.0 m/s, forward alignment >= 0.85
+	const bool matched_seating = (rv_dist <= 2.2f) && (vel_diff <= 3.0f) && (align_dot >= 0.85f);
 
-	// Tier 2: Direct Intercept Close Pass (Rv <= 2.4m, forward aligned >= 0.70 - instant net deployment)
-	const bool close_flyby = (rv_dist <= 2.4f) && (align_dot >= 0.70f);
+	// Tier 2 (Flyby Pass): Rv <= 1.2m, forward alignment >= 0.80
+	const bool close_flyby = (rv_dist <= 1.2f) && (align_dot >= 0.80f);
 
 	if (matched_seating || close_flyby) {
 		_firing_counter++;
