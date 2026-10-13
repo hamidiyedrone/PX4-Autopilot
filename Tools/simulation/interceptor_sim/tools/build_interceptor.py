@@ -1185,16 +1185,18 @@ param set-default CA_ROTOR_COUNT 4
 {body}
 
 param set-default THR_MDL_FAC 0.0
+param set-default CBRK_SUPPLY_CHK 894281
+param set-default COM_MODE_ARM_CHK 1
 param set-default MPC_THR_HOVER {thr_hover:.2f}
 {cam}
 # fast and aggressive: strong tilt, high speeds / accelerations
 param set-default MPC_TILTMAX_AIR 78
 param set-default MPC_XY_VEL_MAX 45
 param set-default MPC_XY_CRUISE 38
-param set-default MPC_ACC_HOR_MAX 15.0
-param set-default MPC_ACC_HOR 10.0
+param set-default MPC_ACC_HOR_MAX 25.0
+param set-default MPC_ACC_HOR 18.0
 param set-default MPC_Z_VEL_MAX_UP 12
-param set-default MPC_Z_VEL_MAX_DN 4.0
+param set-default MPC_Z_VEL_MAX_DN 8.0
 
 # manual flight from the ground station: Altitude / Stabilized modes are limited by tilt only
 param set-default MPC_MAN_TILT_MAX 78

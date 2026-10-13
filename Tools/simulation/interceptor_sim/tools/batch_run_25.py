@@ -618,11 +618,31 @@ def execute_single_run(scen, max_duration=115.0, gui=False):
     rec.start()
 
     # 5. Arm & Takeoff & Intercept
-    run_px4_cmd("commander", "arm")
+    for attempt in range(8):
+        run_px4_cmd("commander", "arm")
+        time.sleep(0.4)
+        run_px4_cmd("commander", "takeoff")
+        # Wait up to 3s for lift-off
+        t_sub = time.time()
+        airborne = False
+        while time.time() - t_sub < 3.0:
+            p_int = rec.poses.get("interceptor_0")
+            if p_int is not None and p_int["pos"][2] > 1.8:
+                airborne = True
+                break
+            time.sleep(0.3)
+        if airborne:
+            break
+        time.sleep(0.5)
+
     time.sleep(0.5)
-    run_px4_cmd("commander", "takeoff")
-    time.sleep(1.5)
-    run_px4_cmd("commander", "mode", "ext1")
+    # Activate Intercept mode with verification and retries
+    for _ in range(8):
+        run_px4_cmd("commander", "mode", "ext1")
+        time.sleep(0.5)
+        st = run_px4_cmd("intercept", "status")
+        if "Active: yes" in st:
+            break
 
     # 6. Pursuit & Dynamic Maneuver Execution
     t_start = time.time()

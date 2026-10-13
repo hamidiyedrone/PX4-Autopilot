@@ -277,11 +277,12 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		// Inside 90m: closing speed smoothly tapers down to min_closing at 20m
 		const float desired_closing = min_closing + (dist_to_target - 20.0f) * 0.15f;
 		const float closing_err = _filt_closing_speed - desired_closing;
+		const float max_braking = (target_speed > 30.0f) ? -2.0f : -4.0f;
 
 		if (closing_err > 0.0f) {
-			_fwd_accel_cmd = math::constrain(-1.5f - 0.35f * closing_err, -4.5f, -0.6f);
+			_fwd_accel_cmd = math::constrain(-1.0f - 0.25f * closing_err, max_braking, -0.4f);
 		} else if (closing_err < -2.0f) {
-			_fwd_accel_cmd = 2.0f;
+			_fwd_accel_cmd = 2.5f;
 		} else {
 			_fwd_accel_cmd = 0.0f;
 		}
@@ -291,8 +292,9 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 	const float min_approach_speed = math::max(target_speed + min_closing, 15.0f);
 	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, 44.0f);
 
-	// 4. Virtual aim point 25m behind target along flight line with 2nd-order Curvature Lead-Pursuit
-	const float dist_behind = 25.0f;
+	// 4. Dynamic aim point behind target: smoothly tapers from 25m down to 2.5m as distance closes
+	const float d_offset = _param_int_basket_d.get(); // 2.5m
+	const float dist_behind = math::constrain(d_offset + (dist_to_target - 15.0f) * 0.35f, d_offset, 25.0f);
 	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
 	const matrix::Vector3f to_aim = aim_point - self_pos;
 	const float dist_to_aim = to_aim.norm();
@@ -303,7 +305,7 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 	const matrix::Vector3f intercept_point = aim_point + _target_vel * time_to_aim + _target_accel * (0.5f * t_acc * t_acc);
 	const matrix::Vector3f to_intercept = intercept_point - self_pos;
 
-	// 5. Horizontal velocity setpoint in inertial NED with MPC_ACC_HOR slew limiting
+	// 5. Horizontal velocity setpoint in inertial NED with dynamic agile turn acceleration limiting
 	const matrix::Vector2f to_intercept_xy(to_intercept(0), to_intercept(1));
 	const float dist_xy = to_intercept_xy.norm();
 	float desired_vx{0.0f};
@@ -318,7 +320,7 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		desired_vy = target_dir(1) * _fwd_speed_cmd;
 	}
 
-	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 22.0f);
 	const float max_dvh = max_acc_hor * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
@@ -373,20 +375,22 @@ void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd,
 	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -3.0f, 3.0f);
 	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -2.0f, 2.0f);
 
-	// Velocity matching + position seating PID (enhanced tracking for curved weaves)
+	// Velocity matching + position seating PID + centripetal turn acceleration feedforward
+	// Target acceleration feedforward a_t * tau_lead eliminates steady-state lag (e_ss = a_t / Kp) in sustained turns
+	const float tau_lead = 0.50f;
 	const matrix::Vector3f v_corr(
-		math::constrain(1.6f * r_v(0) + 0.25f * _pos_integral(0), -8.0f, 8.0f),
-		math::constrain(1.6f * r_v(1) + 0.25f * _pos_integral(1), -8.0f, 8.0f),
-		math::constrain(1.3f * r_v(2) + 0.20f * _pos_integral(2), -4.5f, 4.5f)
+		math::constrain(1.8f * r_v(0) + 0.30f * _pos_integral(0) + _target_accel(0) * tau_lead, -12.0f, 12.0f),
+		math::constrain(1.8f * r_v(1) + 0.30f * _pos_integral(1) + _target_accel(1) * tau_lead, -12.0f, 12.0f),
+		math::constrain(1.4f * r_v(2) + 0.20f * _pos_integral(2) + _target_accel(2) * 0.30f, -5.0f, 5.0f)
 	);
 	const matrix::Vector3f v_rdv = _target_vel + v_corr;
 
-	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float max_acc_hor = math::max(_param_mpc_acc_hor.get(), 22.0f);
 	const float max_dvh = max_acc_hor * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(0) = math::constrain(v_rdv(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
 		vel_cmd(1) = math::constrain(v_rdv(1), _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
-		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 3.0f * dt, _last_vel_cmd(2) + 3.0f * dt);
+		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 3.5f * dt, _last_vel_cmd(2) + 3.5f * dt);
 	} else {
 		vel_cmd = v_rdv;
 	}
@@ -434,16 +438,16 @@ void Intercept::ComputeGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd, float
 	float yaw_basket{_local_pos.heading};
 	ComputeBasketGuidance(vel_basket, yaw_basket, dt);
 
-	// Smooth blending between Midcourse Lead-Pursuit (Rv > 22m) and Basket Seating (Rv <= 8m)
-	const float w = math::constrain((R_v - 8.0f) / 14.0f, 0.0f, 1.0f);
+	// Smooth blending between Midcourse Lead-Pursuit (Rv > 14m) and Basket Seating (Rv <= 5m)
+	const float w = math::constrain((R_v - 5.0f) / 9.0f, 0.0f, 1.0f);
 	vel_cmd = (vel_midcourse * w) + (vel_basket * (1.0f - w));
 
 	const float dyaw = matrix::wrap_pi(yaw_basket - yaw_midcourse);
 	yaw_cmd = matrix::wrap_pi(yaw_midcourse + dyaw * (1.0f - w));
 
-	if (R_v > 22.0f) {
+	if (R_v > 14.0f) {
 		_guidance_phase = GuidancePhase::APPROACH;
-	} else if (R_v > 8.0f) {
+	} else if (R_v > 5.0f) {
 		_guidance_phase = GuidancePhase::BLENDING;
 	} else {
 		_guidance_phase = _net_fired ? GuidancePhase::NET_FIRED : GuidancePhase::RENDEZVOUS;
@@ -462,11 +466,11 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const float align_dot = self_fwd.dot(u_t_horiz);
 
 	// Tactical Two-Tier Firing Envelope:
-	// Tier 1: Precision Basket Seating (Rv <= 2.6m, vel match <= 4.0 m/s, align >= 0.90)
-	const bool matched_seating = (rv_dist <= 2.6f) && (vel_diff <= 4.0f) && (align_dot >= 0.90f);
+	// Tier 1: Precision Basket Seating (Rv <= 3.8m, vel match <= 5.0 m/s, forward alignment >= 0.80 [~36 deg])
+	const bool matched_seating = (rv_dist <= 3.8f) && (vel_diff <= 5.0f) && (align_dot >= 0.80f);
 
-	// Tier 2: Direct Intercept Close Pass (Rv <= 1.6m, forward aligned >= 0.85 - instant net deployment)
-	const bool close_flyby = (rv_dist <= 1.6f) && (align_dot >= 0.85f);
+	// Tier 2: Direct Intercept Close Pass (Rv <= 2.4m, forward aligned >= 0.70 - instant net deployment)
+	const bool close_flyby = (rv_dist <= 2.4f) && (align_dot >= 0.70f);
 
 	if (matched_seating || close_flyby) {
 		_firing_counter++;
@@ -551,10 +555,9 @@ void Intercept::Run()
 		return;
 	}
 
-	// 4. Respond to arming checks from Commander
-	if (_arming_check_request_sub.updated()) {
-		arming_check_request_s req;
-		_arming_check_request_sub.copy(&req);
+	// 4. Respond to all arming checks from Commander
+	arming_check_request_s req;
+	while (_arming_check_request_sub.update(&req)) {
 		ReplyToArmingCheck(req.request_id);
 	}
 
