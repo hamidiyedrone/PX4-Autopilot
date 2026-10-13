@@ -328,11 +328,11 @@ void Intercept::ComputeMidcourseGuidance(matrix::Vector3f &vel_cmd, float &yaw_c
 		vel_cmd(1) = desired_vy;
 	}
 
-	// 6. Altitude tracking in Approach mode (Extended to -7.0 m/s climb to match high-speed zoom climbs)
+	// 6. Altitude tracking in Approach mode (Extended to +/-7.0 m/s to match rapid dives and zoom climbs)
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
 	const float K_z_p = _param_int_kp_z_app.get();
-	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.0f, 4.5f);
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.0f, 7.0f);
 
 	const float max_dvz = 4.0f * dt;
 	if (_last_cmd_valid && dt > 0.005f) {
@@ -457,18 +457,21 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const matrix::Vector3f self_fwd(cosf(_local_pos.heading), sinf(_local_pos.heading), 0.0f);
 	const matrix::Vector3f u_t_horiz = matrix::Vector3f(u_t(0), u_t(1), 0.0f).normalized();
 
-	// Firing envelope criteria (Matching MITLA 2.0 net physical deployment window):
-	// 1. Sanal sepete <= 2.6m yaklaşma (R_v <= 2.6m: 3.5m çaplı ağ konisi menzili)
-	const bool pos_ok = (r_v.norm() <= 2.6f);
-	// 2. Hız farkı <= 3.2 m/s (hız eşitleme)
-	const bool vel_ok = ((self_vel - _target_vel).norm() <= 3.2f);
-	// 3. Vektörel paralellik >= 0.92 (~23 dereceden dar açı)
-	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.92f);
+	const float rv_dist = r_v.norm();
+	const float vel_diff = (self_vel - _target_vel).norm();
+	const float align_dot = self_fwd.dot(u_t_horiz);
 
-	if (pos_ok && vel_ok && align_ok) {
+	// Tactical Two-Tier Firing Envelope:
+	// Tier 1: Precision Basket Seating (Rv <= 2.6m, vel match <= 4.0 m/s, align >= 0.90)
+	const bool matched_seating = (rv_dist <= 2.6f) && (vel_diff <= 4.0f) && (align_dot >= 0.90f);
+
+	// Tier 2: Direct Intercept Close Pass (Rv <= 1.6m, forward aligned >= 0.85 - instant net deployment)
+	const bool close_flyby = (rv_dist <= 1.6f) && (align_dot >= 0.85f);
+
+	if (matched_seating || close_flyby) {
 		_firing_counter++;
 
-		if (_firing_counter >= 5 && !_net_fired) {
+		if (_firing_counter >= 4 && !_net_fired) {
 			_net_fired = true;
 			_net_fire_time = hrt_absolute_time();
 			PX4_INFO(">>> NET GUN FIRED! TARGET CAPTURED! <<<");
