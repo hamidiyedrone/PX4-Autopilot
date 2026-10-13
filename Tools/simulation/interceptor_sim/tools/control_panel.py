@@ -1513,10 +1513,15 @@ class ControlPanelWindow(QMainWindow):
 				else:
 					editor.setValue(float(val))
 
-		self.mav_worker.save_params_to_storage()
-		self.lbl_tune_state.setText(
-			f"Applied Trial #{best['trial_num']} ({best['name']}) parameters to PX4 and saved to persistent storage!"
-		)
+		if not self.drone_armed:
+			self.mav_worker.save_params_to_storage()
+			self.lbl_tune_state.setText(
+				f"Applied Trial #{best['trial_num']} ({best['name']}) parameters to PX4 and saved to persistent storage!"
+			)
+		else:
+			self.lbl_tune_state.setText(
+				f"Applied Trial #{best['trial_num']} ({best['name']}) parameters live to PX4 (storage save requires Disarm)."
+			)
 
 	def _on_tab_changed(self, index):
 		# Auto-request params when switching to Tab 2 (Params) or Tab 3 (Auto-Tune) if connected and not yet requested
@@ -1563,8 +1568,11 @@ class ControlPanelWindow(QMainWindow):
 				val = float(editor.value())
 			self.mav_worker.set_param(name, val, is_int=is_bool)
 			count += 1
-		self.mav_worker.save_params_to_storage()
-		self.lbl_param_status.setText(f"{count} parameters sent to PX4 and saved.")
+		if not self.drone_armed:
+			self.mav_worker.save_params_to_storage()
+			self.lbl_param_status.setText(f"{count} parameters applied and saved to persistent storage.")
+		else:
+			self.lbl_param_status.setText(f"{count} parameters applied live (storage save requires Disarm).")
 
 	def _on_reset_defaults(self):
 		for name, meta in self.param_metadata.items():

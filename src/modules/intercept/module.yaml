@@ -80,6 +80,16 @@ parameters:
             max: 10.0
             decimal: 2
 
+        INT_TRM_FWD_TOL:
+            description:
+                short: Terminal forward distance tracking deadband tolerance
+                long: Distance tolerance (+/- meters) around desired standoff in close pursuit to maintain speed match without hunting.
+            type: float
+            default: 0.20
+            min: 0.05
+            max: 1.0
+            decimal: 2
+
         INT_TRM_KP_LAT:
             description:
                 short: Terminal lateral visual tracking proportional gain
@@ -90,12 +100,22 @@ parameters:
             max: 5.0
             decimal: 2
 
+        INT_TRM_LAT_TOL:
+            description:
+                short: Terminal lateral optical tracking deadband tolerance
+                long: Lateral optical screen error tolerance (+/- from center 0.50) to suppress lateral chattering and fishtailing.
+            type: float
+            default: 0.03
+            min: 0.005
+            max: 0.15
+            decimal: 3
+
         INT_TRM_LAT_MAX:
             description:
                 short: Terminal maximum lateral strafe speed
-                long: Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking.
+                long: Maximum lateral velocity correction (m/s). Set 0.0 for pure coordinated heading flight (no side-slip).
             type: float
-            default: 0.3
+            default: 0.0
             min: 0.0
             max: 5.0
             decimal: 1

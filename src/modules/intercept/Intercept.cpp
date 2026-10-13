@@ -467,11 +467,12 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float kd_opt = _param_int_trm_kd_fwd.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 
-	constexpr float DIST_TOL = 0.25f; // +/- 25 cm corridor around desired_dist
+	const float dist_tol = _param_int_trm_fwd_tol.get();
 	float delta_v = 0.0f;
 
-	if (fabsf(dist_err) > DIST_TOL) {
-		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.15f * dist_err, -3.0f, 3.0f);
+	if (fabsf(dist_err) > dist_tol) {
+		const float dist_err_corr = (dist_err > 0.0f) ? (dist_err - dist_tol) : (dist_err + dist_tol);
+		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.15f * dist_err_corr, -3.0f, 3.0f);
 	} else {
 		// Inside corridor: gently damp any residual closing velocity
 		delta_v = -kd_opt * 0.5f * _filt_visual_closing_speed;
@@ -522,19 +523,20 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Coordinated Flight: forward velocity flows primarily along Line-of-Sight.
-	// Lateral strafe is bounded via INT_TRM_LAT_MAX and driven by INT_TRM_KP_LAT.
-	float lat_err = 0.0f;
-	if (cx < 0.45f) {
-		lat_err = cx - 0.45f;
-	} else if (cx > 0.55f) {
-		lat_err = cx - 0.55f;
-	} else {
-		lat_err = 0.0f;
-	}
-	const float kp_lat = _param_int_trm_kp_lat.get();
+	// Pure Coordinated Flight: forward velocity flows strictly along Line-of-Sight.
+	// Lateral strafe is completely disabled (vel_lat_corr = 0.0) when INT_TRM_LAT_MAX = 0.0 to eliminate high-speed side-slips and banking.
 	const float max_lat_vel = _param_int_trm_lat_max.get();
-	const float vel_lat_corr = math::constrain(lat_err * kp_lat, -max_lat_vel, max_lat_vel);
+	const float lat_tol = _param_int_trm_lat_tol.get();
+	float vel_lat_corr = 0.0f;
+	if (max_lat_vel > 0.001f) {
+		const float offset_x = cx - 0.50f;
+		float lat_err = 0.0f;
+		if (fabsf(offset_x) > lat_tol) {
+			lat_err = (offset_x > 0.0f) ? (offset_x - lat_tol) : (offset_x + lat_tol);
+		}
+		const float kp_lat = _param_int_trm_kp_lat.get();
+		vel_lat_corr = math::constrain(lat_err * kp_lat, -max_lat_vel, max_lat_vel);
+	}
 
 	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
 	const float right_x = -los_y_norm;
@@ -593,11 +595,10 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		// Camera horizontal FOV = 80 deg. Optical azimuth error angle:
 		constexpr float HFOV_RAD = math::radians(80.0f);
 		constexpr float OPTICAL_YAW_GAIN = 2.0f * tanf(HFOV_RAD / 2.0f); // ~1.678 rad
-		const float visual_yaw_offset = (cx - 0.50f) * OPTICAL_YAW_GAIN;
-
-		// Deadband corridor around screen center: +/- 0.025 (corridor [0.475, 0.525])
-		constexpr float YAW_DEADBAND = 0.025f;
-		if (fabsf(cx - 0.50f) > YAW_DEADBAND) {
+		// Deadband corridor around screen center: unified with INT_TRM_LAT_TOL (lat_tol)
+		if (fabsf(cx - 0.50f) > lat_tol) {
+			const float offset_yaw = (cx > 0.50f) ? (cx - 0.50f - lat_tol) : (cx - 0.50f + lat_tol);
+			const float visual_yaw_offset = offset_yaw * OPTICAL_YAW_GAIN;
 			desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset);
 		}
 	}
