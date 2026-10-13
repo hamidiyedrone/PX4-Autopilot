@@ -179,3 +179,13 @@ parameters:
             min: 5.0
             max: 60.0
             decimal: 1
+
+        INT_TRM_TC_GAIN:
+            description:
+                short: Terminal turn coordinator roll-to-yaw feedback gain
+                long: Turn coordinator gain feeding back vehicle roll angle into yaw guidance to assist turn entry and actively drive steady-state roll back to zero.
+            type: float
+            default: 0.30
+            min: 0.0
+            max: 1.5
+            decimal: 2

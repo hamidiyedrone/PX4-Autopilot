@@ -187,6 +187,11 @@ def load_intercept_param_metadata():
 				"short": "Terminal maximum heading slew rate",
 				"long": "Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting."
 			},
+			"INT_TRM_TC_GAIN": {
+				"name": "INT_TRM_TC_GAIN", "type": "float", "default": 0.30, "min": 0.0, "max": 1.5, "decimal": 2,
+				"short": "Turn coordinator roll feedback gain",
+				"long": "Feeds back roll angle into yaw guidance to assist bank-to-turn entry and actively drive steady-state roll back to zero."
+			},
 		}
 	return params
 

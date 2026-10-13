@@ -595,19 +595,28 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		// Camera horizontal FOV = 80 deg. Optical azimuth error angle:
 		constexpr float HFOV_RAD = math::radians(80.0f);
 		constexpr float OPTICAL_YAW_GAIN = 2.0f * tanf(HFOV_RAD / 2.0f); // ~1.678 rad
-		// Deadband corridor around screen center: unified with INT_TRM_LAT_TOL (lat_tol)
+
+		// Optical tracking offset outside deadband
+		float visual_yaw_offset = 0.0f;
 		if (fabsf(cx - 0.50f) > lat_tol) {
 			const float offset_yaw = (cx > 0.50f) ? (cx - 0.50f - lat_tol) : (cx - 0.50f + lat_tol);
-			const float visual_yaw_offset = offset_yaw * OPTICAL_YAW_GAIN;
-			desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset);
+			visual_yaw_offset = offset_yaw * OPTICAL_YAW_GAIN;
 		}
+
+		// Turn Coordinator: Feed back vehicle roll angle into yaw guidance.
+		// Dynamically assists coordinated banking entry in turns, while actively steering heading
+		// to extinguish cross-track body velocity and drive steady-state roll back to zero.
+		const matrix::Eulerf euler(matrix::Quatf(_vehicle_attitude.q));
+		const float roll_coord = euler.phi() * _param_int_trm_tc_gain.get();
+
+		desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset + roll_coord);
 	}
 
 	if (_last_cmd_valid && dt > 0.005f) {
 		// Soft deceleration (tapering): smoothly reduce maximum yaw rate as target approaches center
 		// Eliminates overshoot completely by docking gently at the deadband threshold
 		const float center_dist = fabsf(cx - 0.50f);
-		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, 0.25f, 1.0f);
+		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, 0.35f, 1.0f);
 		const float max_close_yaw_rate = math::radians(_param_int_trm_yawrate.get());
 		const float max_dyaw = (max_close_yaw_rate * rate_factor) * dt;
 
