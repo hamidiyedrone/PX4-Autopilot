@@ -30,6 +30,7 @@ import math
 import os
 import struct
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +44,7 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QShortcut, QTransform
 from PySide6.QtWidgets import (
 	QApplication,
+	QCheckBox,
 	QComboBox,
 	QDoubleSpinBox,
 	QGridLayout,
@@ -287,6 +289,61 @@ class TelemetryWorker(QObject):
 			pass
 
 
+class DetectorWorker(QObject):
+	"""Worker to query and update sim_detector noise settings asynchronously."""
+
+	noise_received = Signal(dict)
+
+	def __init__(self, host="127.0.0.1", port=8002):
+		super().__init__()
+		self.host = host
+		self.port = port
+		self.base_url = f"http://{host}:{port}"
+		self._is_polling = False
+
+	def poll(self):
+		if self._is_polling:
+			return
+		self._is_polling = True
+
+		def _worker():
+			try:
+				url = f"{self.base_url}/noise"
+				req = urllib.request.Request(url, headers={"User-Agent": "ControlPanel/1.0"})
+				with urllib.request.urlopen(req, timeout=0.3) as resp:
+					if resp.status == 200:
+						data = json.loads(resp.read().decode("utf-8"))
+						if "noise" in data:
+							self.noise_received.emit(data["noise"])
+			except Exception:
+				pass
+			finally:
+				self._is_polling = False
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+	def send_command(self, cmd_dict):
+		def _worker():
+			try:
+				url = f"{self.base_url}/cmd"
+				post_data = json.dumps(cmd_dict).encode("utf-8")
+				req = urllib.request.Request(
+					url,
+					data=post_data,
+					headers={"Content-Type": "application/json", "User-Agent": "ControlPanel/1.0"},
+					method="POST",
+				)
+				with urllib.request.urlopen(req, timeout=0.5) as resp:
+					if resp.status == 200:
+						data = json.loads(resp.read().decode("utf-8"))
+						if "noise" in data:
+							self.noise_received.emit(data["noise"])
+			except Exception:
+				pass
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+
 class MavlinkWorker(QObject):
 	"""Runs in its own thread: reads the PX4 MAVLink link, handles modes, telemetry and parameters."""
 
@@ -507,18 +564,19 @@ class ControlPanelWindow(QMainWindow):
 	YAW_RATE_DPS = 20.0  # matches target_sim straight-mode max turn rate
 	ALT_RATE_MPS = 4.0
 
-	def __init__(self, host="127.0.0.1", port=8000, mavlink_url="udpin:0.0.0.0:14550"):
+	def __init__(self, host="127.0.0.1", port=8000, mavlink_url="udpin:0.0.0.0:14550", detector_port=8002):
 		super().__init__()
 		self.host = host
 		self.port = port
+		self.detector_port = detector_port
 		self.current_mode = "straight"
 		self.target_speed = 25.0
 		self.target_alt = 100.0
 		self.target_heading = 0.0
 
 		self.setWindowTitle("Control Panel")
-		self.resize(960, 600)
-		self.setMinimumSize(850, 520)
+		self.resize(980, 680)
+		self.setMinimumSize(850, 560)
 
 		# Parameter management state
 		self.param_metadata = load_intercept_param_metadata()
@@ -528,9 +586,12 @@ class ControlPanelWindow(QMainWindow):
 		self._initial_params_requested = False
 
 		self.worker = TelemetryWorker(host, port)
+		self.detector_worker = DetectorWorker(host, detector_port)
 		self.poll_timer = QTimer(self)
 		self.poll_timer.timeout.connect(self.worker.poll)
+		self.poll_timer.timeout.connect(self.detector_worker.poll)
 		self.worker.telemetry_received.connect(self.on_telemetry)
+		self.detector_worker.noise_received.connect(self.on_detector_noise)
 
 		# Directions currently held via D-pad buttons or arrow keys
 		self.held = set()
@@ -793,7 +854,186 @@ class ControlPanelWindow(QMainWindow):
 		telem_layout.addWidget(self.lbl_drone_msg, 5, 0, 1, 4)
 
 		layout.addWidget(telem_group)
+		self._init_vision_noise_ui(layout)
 		layout.addStretch()
+
+	def _init_vision_noise_ui(self, parent_layout):
+		noise_group = QGroupBox("Vision Detector Noise")
+		noise_layout = QVBoxLayout(noise_group)
+		noise_layout.setSpacing(4)
+
+		# Top row: Enable toggle & status
+		top_row = QHBoxLayout()
+		self.chk_noise_enable = QCheckBox("Enable Noise")
+		self.chk_noise_enable.setChecked(True)
+		self.chk_noise_enable.toggled.connect(self._on_noise_toggled)
+		top_row.addWidget(self.chk_noise_enable)
+		top_row.addStretch()
+		self.lbl_noise_status = QLabel("Ready")
+		self.lbl_noise_status.setStyleSheet("color: gray;")
+		top_row.addWidget(self.lbl_noise_status)
+		noise_layout.addLayout(top_row)
+
+		# Sliders grid
+		grid = QGridLayout()
+		grid.setHorizontalSpacing(8)
+		grid.setVerticalSpacing(3)
+
+		# 1. BBox Jitter (0.0 to 15.0 px, default 4.0 px)
+		grid.addWidget(QLabel("BBox Jitter:"), 0, 0)
+		self.slider_bbox_jitter = QSlider(Qt.Horizontal)
+		self.slider_bbox_jitter.setRange(0, 150)
+		self.slider_bbox_jitter.setValue(40)
+		self.lbl_bbox_jitter_val = QLabel("4.0 px")
+		self.lbl_bbox_jitter_val.setFixedWidth(50)
+		self.slider_bbox_jitter.valueChanged.connect(
+			lambda v: self.lbl_bbox_jitter_val.setText(f"{v/10.0:.1f} px")
+		)
+		self.slider_bbox_jitter.sliderReleased.connect(
+			lambda: self._send_noise_cmd({"bbox_px": self.slider_bbox_jitter.value() / 10.0})
+		)
+		grid.addWidget(self.slider_bbox_jitter, 0, 1)
+		grid.addWidget(self.lbl_bbox_jitter_val, 0, 2)
+
+		# 2. Dropout Rate (0 to 30 %, default 5%)
+		grid.addWidget(QLabel("Dropout:"), 1, 0)
+		self.slider_dropout = QSlider(Qt.Horizontal)
+		self.slider_dropout.setRange(0, 30)
+		self.slider_dropout.setValue(5)
+		self.lbl_dropout_val = QLabel("5 %")
+		self.lbl_dropout_val.setFixedWidth(50)
+		self.slider_dropout.valueChanged.connect(
+			lambda v: self.lbl_dropout_val.setText(f"{v} %")
+		)
+		self.slider_dropout.sliderReleased.connect(
+			lambda: self._send_noise_cmd({"dropout_rate": self.slider_dropout.value() / 100.0})
+		)
+		grid.addWidget(self.slider_dropout, 1, 1)
+		grid.addWidget(self.lbl_dropout_val, 1, 2)
+
+		# 3. Latency (0 to 5 frames, default 1 frame)
+		grid.addWidget(QLabel("Latency:"), 2, 0)
+		self.slider_latency = QSlider(Qt.Horizontal)
+		self.slider_latency.setRange(0, 5)
+		self.slider_latency.setValue(1)
+		self.lbl_latency_val = QLabel("1 frame")
+		self.lbl_latency_val.setFixedWidth(50)
+		self.slider_latency.valueChanged.connect(
+			lambda v: self.lbl_latency_val.setText(f"{v} frame" if v == 1 else f"{v} frames")
+		)
+		self.slider_latency.sliderReleased.connect(
+			lambda: self._send_noise_cmd({"latency_frames": self.slider_latency.value()})
+		)
+		grid.addWidget(self.slider_latency, 2, 1)
+		grid.addWidget(self.lbl_latency_val, 2, 2)
+
+		# 4. Range Noise (0.00 to 0.50 m, default 0.15 m)
+		grid.addWidget(QLabel("Range Noise:"), 3, 0)
+		self.slider_range_noise = QSlider(Qt.Horizontal)
+		self.slider_range_noise.setRange(0, 50)
+		self.slider_range_noise.setValue(15)
+		self.lbl_range_noise_val = QLabel("±0.15 m")
+		self.lbl_range_noise_val.setFixedWidth(50)
+		self.slider_range_noise.valueChanged.connect(
+			lambda v: self.lbl_range_noise_val.setText(f"±{v/100.0:.2f} m")
+		)
+		self.slider_range_noise.sliderReleased.connect(
+			lambda: self._send_noise_cmd({"range_noise_m": self.slider_range_noise.value() / 100.0})
+		)
+		grid.addWidget(self.slider_range_noise, 3, 1)
+		grid.addWidget(self.lbl_range_noise_val, 3, 2)
+
+		noise_layout.addLayout(grid)
+
+		# Presets row
+		preset_row = QHBoxLayout()
+		preset_row.setSpacing(4)
+
+		btn_clean = QPushButton("Clean (0 px)")
+		btn_clean.setToolTip("Disable jitter, dropout, and latency")
+		btn_clean.clicked.connect(lambda: self._apply_noise_preset(0.0, 0.0, 0, 0.0))
+
+		btn_default = QPushButton("Default")
+		btn_default.setToolTip("Standard noise: 4.0 px jitter, 5% drop, 1 frame delay")
+		btn_default.clicked.connect(lambda: self._apply_noise_preset(4.0, 0.05, 1, 0.15))
+
+		btn_stress = QPushButton("Stress")
+		btn_stress.setToolTip("Stress test: 10.0 px jitter, 15% drop, 2 frames delay")
+		btn_stress.clicked.connect(lambda: self._apply_noise_preset(10.0, 0.15, 2, 0.35))
+
+		for b in (btn_clean, btn_default, btn_stress):
+			b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+			preset_row.addWidget(b)
+
+		noise_layout.addLayout(preset_row)
+		parent_layout.addWidget(noise_group)
+
+	def _on_noise_toggled(self, checked):
+		self.slider_bbox_jitter.setEnabled(checked)
+		self.slider_dropout.setEnabled(checked)
+		self.slider_latency.setEnabled(checked)
+		self.slider_range_noise.setEnabled(checked)
+		self._send_noise_cmd({"enabled": checked})
+
+	def _apply_noise_preset(self, bbox_px, dropout_rate, latency_frames, range_noise_m):
+		self.chk_noise_enable.setChecked(True)
+		self.slider_bbox_jitter.setValue(int(bbox_px * 10))
+		self.slider_dropout.setValue(int(dropout_rate * 100))
+		self.slider_latency.setValue(int(latency_frames))
+		self.slider_range_noise.setValue(int(range_noise_m * 100))
+		self._send_noise_cmd({
+			"enabled": True,
+			"bbox_px": bbox_px,
+			"dropout_rate": dropout_rate,
+			"latency_frames": latency_frames,
+			"range_noise_m": range_noise_m,
+		})
+
+	def _send_noise_cmd(self, cmd_dict):
+		self.detector_worker.send_command(cmd_dict)
+		self.lbl_noise_status.setText("Applied")
+
+	def on_detector_noise(self, data):
+		if not self.slider_bbox_jitter.isSliderDown() and "bbox_px" in data:
+			val = int(data["bbox_px"] * 10)
+			self.slider_bbox_jitter.blockSignals(True)
+			self.slider_bbox_jitter.setValue(val)
+			self.slider_bbox_jitter.blockSignals(False)
+			self.lbl_bbox_jitter_val.setText(f"{data['bbox_px']:.1f} px")
+
+		if not self.slider_dropout.isSliderDown() and "dropout_rate" in data:
+			val = int(data["dropout_rate"] * 100)
+			self.slider_dropout.blockSignals(True)
+			self.slider_dropout.setValue(val)
+			self.slider_dropout.blockSignals(False)
+			self.lbl_dropout_val.setText(f"{val} %")
+
+		if not self.slider_latency.isSliderDown() and "latency_frames" in data:
+			val = int(data["latency_frames"])
+			self.slider_latency.blockSignals(True)
+			self.slider_latency.setValue(val)
+			self.slider_latency.blockSignals(False)
+			self.lbl_latency_val.setText(f"{val} frame" if val == 1 else f"{val} frames")
+
+		if not self.slider_range_noise.isSliderDown() and "range_noise_m" in data:
+			val = int(data["range_noise_m"] * 100)
+			self.slider_range_noise.blockSignals(True)
+			self.slider_range_noise.setValue(val)
+			self.slider_range_noise.blockSignals(False)
+			self.lbl_range_noise_val.setText(f"±{data['range_noise_m']:.2f} m")
+
+		if "enabled" in data:
+			en = bool(data["enabled"])
+			if self.chk_noise_enable.isChecked() != en:
+				self.chk_noise_enable.blockSignals(True)
+				self.chk_noise_enable.setChecked(en)
+				self.chk_noise_enable.blockSignals(False)
+				self.slider_bbox_jitter.setEnabled(en)
+				self.slider_dropout.setEnabled(en)
+				self.slider_latency.setEnabled(en)
+				self.slider_range_noise.setEnabled(en)
+
+		self.lbl_noise_status.setText("Connected")
 
 	def _init_params_ui(self, parent):
 		layout = QVBoxLayout(parent)
@@ -1821,11 +2061,12 @@ def main():
 	parser = argparse.ArgumentParser(description="Control Panel")
 	parser.add_argument("--host", default="127.0.0.1", help="Target sim HTTP host")
 	parser.add_argument("--port", type=int, default=8000, help="Target sim HTTP port")
+	parser.add_argument("--detector-port", type=int, default=8002, help="Detector HTTP control port")
 	parser.add_argument("--mavlink", default="udpin:0.0.0.0:14550", help="Interceptor PX4 MAVLink link (GCS link, like QGC)")
 	args = parser.parse_args()
 
 	app = QApplication(sys.argv)
-	win = ControlPanelWindow(host=args.host, port=args.port, mavlink_url=args.mavlink)
+	win = ControlPanelWindow(host=args.host, port=args.port, mavlink_url=args.mavlink, detector_port=args.detector_port)
 	win.show()
 	sys.exit(app.exec())
 

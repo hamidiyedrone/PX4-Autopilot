@@ -24,6 +24,7 @@ Mirrored wire format: src/drivers/target_vision/target_vision_protocol.h
 
 import argparse
 import collections
+import json
 import math
 import os
 import queue
@@ -31,7 +32,10 @@ import random
 import re
 import socket
 import struct
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 from gz.msgs10.clock_pb2 import Clock
@@ -142,6 +146,96 @@ def talon_vertices():
     return np.concatenate(pts)
 
 
+# ----------------------------------------------------------- HTTP control ---
+
+def start_noise_control_server(noise_state, lock, port=8002):
+    class NoiseHandler(BaseHTTPRequestHandler):
+        def _send_json(self, data, code=200):
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_OPTIONS(self):
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path in ("/", "/noise", "/detector"):
+                with lock:
+                    self._send_json({"status": "ok", "noise": dict(noise_state)})
+            elif path == "/cmd":
+                query = parse_qs(parsed.query)
+                cmd = {k: v[0] for k, v in query.items()}
+                self._apply_cmd(cmd)
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            parsed = urlparse(self.path)
+            if parsed.path in ("/cmd", "/noise"):
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    cmd = json.loads(raw.decode("utf-8")) if raw else {}
+                except Exception:
+                    cmd = {}
+                self._apply_cmd(cmd)
+            else:
+                self.send_error(404)
+
+        def _apply_cmd(self, cmd):
+            with lock:
+                if "enabled" in cmd:
+                    val = cmd["enabled"]
+                    if isinstance(val, str):
+                        noise_state["enabled"] = val.lower() in ("1", "true", "yes", "on")
+                    else:
+                        noise_state["enabled"] = bool(val)
+                if "bbox_px" in cmd:
+                    try:
+                        noise_state["bbox_px"] = max(0.0, float(cmd["bbox_px"]))
+                    except (ValueError, TypeError):
+                        pass
+                if "dropout_rate" in cmd:
+                    try:
+                        noise_state["dropout_rate"] = max(0.0, min(1.0, float(cmd["dropout_rate"])))
+                    except (ValueError, TypeError):
+                        pass
+                if "latency_frames" in cmd:
+                    try:
+                        noise_state["latency_frames"] = max(0, int(cmd["latency_frames"]))
+                    except (ValueError, TypeError):
+                        pass
+                if "range_noise_m" in cmd:
+                    try:
+                        noise_state["range_noise_m"] = max(0.0, float(cmd["range_noise_m"]))
+                    except (ValueError, TypeError):
+                        pass
+                res = dict(noise_state)
+            self._send_json({"status": "ok", "noise": res})
+
+        def log_message(self, *args):
+            pass
+
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0", port), NoiseHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print(f"sim_detector: HTTP noise control API listening on port {port}")
+    except Exception as e:
+        print(f"Warning: could not bind detector control port {port}: {e}")
+
+
 # -------------------------------------------------------------------- main ---
 
 def main():
@@ -174,6 +268,8 @@ def main():
                     help="detection latency [frames], default: from interceptor.yaml or 1")
     ap.add_argument("--noise-range", type=float, default=None,
                     help="range measurement jitter stddev [m], default: from interceptor.yaml or 0.15")
+    ap.add_argument("--ctrl-port", type=int, default=8002,
+                    help="HTTP control port for dynamic noise tuning (default: 8002)")
     a = ap.parse_args()
 
     # camera intrinsics: from interceptor.yaml unless overridden
@@ -198,6 +294,16 @@ def main():
     noise_dropout_rate = a.noise_dropout if a.noise_dropout is not None else noise_cfg.get("dropout_rate", 0.05)
     noise_latency_frames = a.noise_latency if a.noise_latency is not None else noise_cfg.get("latency_frames", 1)
     noise_range_m = a.noise_range if a.noise_range is not None else noise_cfg.get("range_noise_m", 0.15)
+
+    noise_state = {
+        "enabled": bool(noise_enabled),
+        "bbox_px": float(noise_bbox_px),
+        "dropout_rate": float(noise_dropout_rate),
+        "latency_frames": int(noise_latency_frames),
+        "range_noise_m": float(noise_range_m),
+    }
+    noise_lock = threading.Lock()
+    start_noise_control_server(noise_state, noise_lock, a.ctrl_port)
 
     # Talon vertices for bounding box projection
     try:
@@ -335,12 +441,19 @@ def main():
     bbox_noise_state = np.zeros(4)  # [cx, cy, w, h]
 
     def dispatch_packet(pkt_to_send, msg_to_send):
-        if not noise_enabled or noise_latency_frames <= 0:
+        with noise_lock:
+            cur_enabled = noise_state["enabled"]
+            cur_latency = noise_state["latency_frames"]
+        if not cur_enabled or cur_latency <= 0:
+            while latency_queue:
+                p_out, m_out = latency_queue.popleft()
+                sock.sendto(p_out, dest)
+                pub_detection.publish(m_out)
             sock.sendto(pkt_to_send, dest)
             pub_detection.publish(msg_to_send)
             return
         latency_queue.append((pkt_to_send, msg_to_send))
-        while len(latency_queue) > noise_latency_frames:
+        while len(latency_queue) > cur_latency:
             p_out, m_out = latency_queue.popleft()
             sock.sendto(p_out, dest)
             pub_detection.publish(m_out)
@@ -531,9 +644,14 @@ def main():
                     visible = True
                     dist_ratio = float(np.clip(range_m / a.max_range, 0.0, 1.0))
 
+                    with noise_lock:
+                        cur_noise_enabled = noise_state["enabled"]
+                        cur_bbox_px = noise_state["bbox_px"]
+                        cur_dropout_rate = noise_state["dropout_rate"]
+
                     # Random dropout strictly proportional to distance (virtually 0 close-up)
-                    cur_dropout = noise_dropout_rate * dist_ratio
-                    if noise_enabled and cur_dropout > 0.0 and random.random() < cur_dropout:
+                    cur_dropout = cur_dropout_rate * dist_ratio
+                    if cur_noise_enabled and cur_dropout > 0.0 and random.random() < cur_dropout:
                         visible = False
 
                     if visible:
@@ -542,10 +660,10 @@ def main():
                         w_raw = bw_clip / width
                         h_raw = bh_clip / height
 
-                        if noise_enabled and noise_bbox_px > 0.0:
+                        if cur_noise_enabled and cur_bbox_px > 0.0:
                             # Bounding box jitter strictly proportional to distance:
-                            # Scales from ~0.15px close-up (2.5m) to full noise_bbox_px at max range (50m)
-                            dist_scale = float(np.clip(dist_ratio * noise_bbox_px, 0.15, noise_bbox_px * 1.5))
+                            # Scales from ~0.15px close-up (2.5m) to full cur_bbox_px at max range (50m)
+                            dist_scale = float(np.clip(dist_ratio * cur_bbox_px, 0.15, cur_bbox_px * 1.5))
                             drift = np.random.normal(0.0, 1.0, 4)
                             bbox_noise_state = 0.65 * bbox_noise_state + 0.35 * drift
 
@@ -589,14 +707,18 @@ def main():
             q_out = [float(q[0]), float(q[1]), float(q[2]), float(q[3])]
             flags = FLAG_DETECTED | FLAG_RANGE | FLAG_ATTITUDE
 
-        if noise_enabled:
+        with noise_lock:
+            cur_noise_enabled = noise_state["enabled"]
+            cur_range_noise_m = noise_state["range_noise_m"]
+
+        if cur_noise_enabled:
             dist_ratio = float(np.clip(range_m / a.max_range, 0.0, 1.0))
             conf_val = 255.0 - dist_ratio * 35.0 + random.gauss(0.0, 4.0 * dist_ratio)
             confidence = int(np.clip(conf_val, 170, 255))
             # Range estimation jitter strictly proportional to distance:
-            # At max range (50m): ~noise_range_m (0.15m)
+            # At max range (50m): ~cur_range_noise_m (0.15m)
             # At standoff (2.5m): ~0.0075m (7.5mm)
-            sigma_range = float(np.clip(noise_range_m * dist_ratio, 0.005, noise_range_m * 1.5))
+            sigma_range = float(np.clip(cur_range_noise_m * dist_ratio, 0.005, cur_range_noise_m * 1.5))
             range_out = max(0.2, range_m + random.gauss(0.0, sigma_range))
             range_sigma = float(np.clip(0.01 + dist_ratio * 0.99, 0.01, 1.0))
         else:
