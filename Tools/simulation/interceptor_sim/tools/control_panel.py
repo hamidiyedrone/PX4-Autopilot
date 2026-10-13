@@ -108,7 +108,7 @@ def load_intercept_param_metadata():
 				"long": "Enables the target intercept autonomous flight mode."
 			},
 			"INT_STANDOFF": {
-				"name": "INT_STANDOFF", "type": "float", "default": 3.0, "min": 1.0, "max": 10.0, "decimal": 1,
+				"name": "INT_STANDOFF", "type": "float", "default": 5.0, "min": 1.0, "max": 10.0, "decimal": 1,
 				"short": "Desired terminal standoff distance",
 				"long": "Horizontal distance in meters to maintain behind target during close pursuit."
 			},
@@ -133,37 +133,37 @@ def load_intercept_param_metadata():
 				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
 			},
 			"INT_TRM_KP_FWD": {
-				"name": "INT_TRM_KP_FWD", "type": "float", "default": 0.8, "min": 0.1, "max": 5.0, "decimal": 2,
+				"name": "INT_TRM_KP_FWD", "type": "float", "default": 12.0, "min": 0.1, "max": 15.0, "decimal": 2,
 				"short": "Terminal standoff distance error velocity gain",
 				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
 			},
 			"INT_TRM_KD_FWD": {
-				"name": "INT_TRM_KD_FWD", "type": "float", "default": 1.2, "min": 0.1, "max": 10.0, "decimal": 2,
+				"name": "INT_TRM_KD_FWD", "type": "float", "default": 7.5, "min": 0.1, "max": 10.0, "decimal": 2,
 				"short": "Terminal relative closing speed damping gain",
 				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
 			},
-			"INT_TRM_DIST_TOL": {
-				"name": "INT_TRM_DIST_TOL", "type": "float", "default": 0.20, "min": 0.0, "max": 1.0, "decimal": 2,
+			"INT_TRM_FWD_TOL": {
+				"name": "INT_TRM_FWD_TOL", "type": "float", "default": 1.0, "min": 0.05, "max": 1.0, "decimal": 2,
 				"short": "Terminal standoff distance deadband tolerance",
 				"long": "Distance deadband tolerance (+/- meters) around desired standoff in close pursuit to prevent pitch oscillations."
 			},
 			"INT_TRM_KP_LAT": {
-				"name": "INT_TRM_KP_LAT", "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "decimal": 2,
+				"name": "INT_TRM_KP_LAT", "type": "float", "default": 0.2, "min": 0.1, "max": 5.0, "decimal": 2,
 				"short": "Terminal lateral position proportional gain",
 				"long": "Proportional gain (m/s per meter lateral offset) for centering target horizontally."
 			},
 			"INT_TRM_LAT_MAX": {
-				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 1.5, "min": 0.0, "max": 5.0, "decimal": 1,
+				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "decimal": 1,
 				"short": "Terminal maximum lateral strafe speed",
 				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
 			},
 			"INT_TRM_BRK_LAT": {
-				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 0.0, "min": 0.0, "max": 10.0, "decimal": 1,
+				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0, "decimal": 1,
 				"short": "Terminal lateral cornering brake speed reduction",
 				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
 			},
 			"INT_TRM_BRK_TOL": {
-				"name": "INT_TRM_BRK_TOL", "type": "float", "default": 0.25, "min": 0.05, "max": 0.45, "decimal": 2,
+				"name": "INT_TRM_BRK_TOL", "type": "float", "default": 0.20, "min": 0.05, "max": 0.45, "decimal": 2,
 				"short": "Terminal corner braking deadband tolerance",
 				"long": "Lateral screen offset deadband (+/- from center 0.50) before corner braking activates. 0.25 gives corridor [0.25, 0.75]."
 			},
@@ -198,16 +198,16 @@ def load_intercept_param_metadata():
 
 AUTOTUNE_PROFILES = {
 	"forward": {
-		"title": "Forward Standoff & Speed (KP_FWD, KD_FWD, DIST_TOL)",
+		"title": "Forward Standoff & Speed (KP_FWD, KD_FWD, FWD_TOL)",
 		"domain": "forward",
-		"params": ["INT_TRM_KP_FWD", "INT_TRM_KD_FWD", "INT_TRM_DIST_TOL"],
+		"params": ["INT_TRM_KP_FWD", "INT_TRM_KD_FWD", "INT_TRM_FWD_TOL"],
 		"candidates": [
-			{"name": "Current Baseline", "params": {"INT_TRM_KP_FWD": 0.8, "INT_TRM_KD_FWD": 1.2, "INT_TRM_DIST_TOL": 0.20}},
-			{"name": "Soft / Anti-Jitter", "params": {"INT_TRM_KP_FWD": 0.6, "INT_TRM_KD_FWD": 1.4, "INT_TRM_DIST_TOL": 0.30}},
-			{"name": "High Damping", "params": {"INT_TRM_KP_FWD": 0.8, "INT_TRM_KD_FWD": 1.8, "INT_TRM_DIST_TOL": 0.20}},
-			{"name": "Responsive Crisp", "params": {"INT_TRM_KP_FWD": 1.1, "INT_TRM_KD_FWD": 1.5, "INT_TRM_DIST_TOL": 0.15}},
-			{"name": "Tight Tracking", "params": {"INT_TRM_KP_FWD": 1.4, "INT_TRM_KD_FWD": 2.0, "INT_TRM_DIST_TOL": 0.10}},
-			{"name": "Loose Deadband", "params": {"INT_TRM_KP_FWD": 1.0, "INT_TRM_KD_FWD": 1.6, "INT_TRM_DIST_TOL": 0.35}},
+			{"name": "Current Baseline", "params": {"INT_TRM_KP_FWD": 12.0, "INT_TRM_KD_FWD": 7.5, "INT_TRM_FWD_TOL": 1.0}},
+			{"name": "Soft / Anti-Jitter", "params": {"INT_TRM_KP_FWD": 8.0, "INT_TRM_KD_FWD": 6.0, "INT_TRM_FWD_TOL": 1.2}},
+			{"name": "High Damping", "params": {"INT_TRM_KP_FWD": 10.0, "INT_TRM_KD_FWD": 9.0, "INT_TRM_FWD_TOL": 1.0}},
+			{"name": "Responsive Crisp", "params": {"INT_TRM_KP_FWD": 14.0, "INT_TRM_KD_FWD": 8.0, "INT_TRM_FWD_TOL": 0.8}},
+			{"name": "Tight Tracking", "params": {"INT_TRM_KP_FWD": 15.0, "INT_TRM_KD_FWD": 9.0, "INT_TRM_FWD_TOL": 0.5}},
+			{"name": "Loose Deadband", "params": {"INT_TRM_KP_FWD": 11.0, "INT_TRM_KD_FWD": 7.0, "INT_TRM_FWD_TOL": 1.5}},
 		],
 	},
 	"lateral": {
