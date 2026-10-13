@@ -373,11 +373,11 @@ void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd,
 	_pos_integral(1) = math::constrain(_pos_integral(1) + r_v(1) * dt, -3.0f, 3.0f);
 	_pos_integral(2) = math::constrain(_pos_integral(2) + r_v(2) * dt, -2.0f, 2.0f);
 
-	// Velocity matching + position seating PID
+	// Velocity matching + position seating PID (enhanced tracking for curved weaves)
 	const matrix::Vector3f v_corr(
-		math::constrain(1.3f * r_v(0) + 0.20f * _pos_integral(0), -6.0f, 6.0f),
-		math::constrain(1.3f * r_v(1) + 0.20f * _pos_integral(1), -6.0f, 6.0f),
-		math::constrain(1.1f * r_v(2) + 0.15f * _pos_integral(2), -3.0f, 3.0f)
+		math::constrain(1.6f * r_v(0) + 0.25f * _pos_integral(0), -8.0f, 8.0f),
+		math::constrain(1.6f * r_v(1) + 0.25f * _pos_integral(1), -8.0f, 8.0f),
+		math::constrain(1.3f * r_v(2) + 0.20f * _pos_integral(2), -4.5f, 4.5f)
 	);
 	const matrix::Vector3f v_rdv = _target_vel + v_corr;
 
@@ -386,7 +386,7 @@ void Intercept::ComputeBasketGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd,
 	if (_last_cmd_valid && dt > 0.005f) {
 		vel_cmd(0) = math::constrain(v_rdv(0), _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
 		vel_cmd(1) = math::constrain(v_rdv(1), _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
-		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 2.0f * dt, _last_vel_cmd(2) + 2.0f * dt);
+		vel_cmd(2) = math::constrain(v_rdv(2), _last_vel_cmd(2) - 3.0f * dt, _last_vel_cmd(2) + 3.0f * dt);
 	} else {
 		vel_cmd = v_rdv;
 	}
@@ -457,18 +457,18 @@ void Intercept::CheckFiringEnvelope(const matrix::Vector3f &r_v, const matrix::V
 	const matrix::Vector3f self_fwd(cosf(_local_pos.heading), sinf(_local_pos.heading), 0.0f);
 	const matrix::Vector3f u_t_horiz = matrix::Vector3f(u_t(0), u_t(1), 0.0f).normalized();
 
-	// Firing envelope criteria:
-	// 1. Sanal sepete <= 2.2m yaklaşma (R_v <= 2.2m)
-	const bool pos_ok = (r_v.norm() <= 2.2f);
-	// 2. Hız farkı <= 2.5 m/s (hız eşitleme)
-	const bool vel_ok = ((self_vel - _target_vel).norm() <= 2.5f);
-	// 3. Vektörel paralellik >= 0.95 (~18 dereceden dar açı)
-	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.95f);
+	// Firing envelope criteria (Matching MITLA 2.0 net physical deployment window):
+	// 1. Sanal sepete <= 2.6m yaklaşma (R_v <= 2.6m: 3.5m çaplı ağ konisi menzili)
+	const bool pos_ok = (r_v.norm() <= 2.6f);
+	// 2. Hız farkı <= 3.2 m/s (hız eşitleme)
+	const bool vel_ok = ((self_vel - _target_vel).norm() <= 3.2f);
+	// 3. Vektörel paralellik >= 0.92 (~23 dereceden dar açı)
+	const bool align_ok = (self_fwd.dot(u_t_horiz) >= 0.92f);
 
 	if (pos_ok && vel_ok && align_ok) {
 		_firing_counter++;
 
-		if (_firing_counter >= 8 && !_net_fired) {
+		if (_firing_counter >= 5 && !_net_fired) {
 			_net_fired = true;
 			_net_fire_time = hrt_absolute_time();
 			PX4_INFO(">>> NET GUN FIRED! TARGET CAPTURED! <<<");
