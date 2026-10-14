@@ -47,6 +47,8 @@
 
 set -e
 
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
 for arg in "$@"; do
 	case "${arg}" in
 		--gui)

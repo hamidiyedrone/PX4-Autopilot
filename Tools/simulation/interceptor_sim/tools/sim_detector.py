@@ -27,6 +27,7 @@ import collections
 import json
 import math
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import queue
 import random
 import re
