@@ -250,15 +250,7 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 	echo "Target: tools/target_sim.py in the background, log: ${SCRIPT_DIR}/build/target_sim.log"
 	echo "        position: http://localhost:8000/target (2 Hz), ADS-B in QGroundControl"
 
-	if [ "${GCS_GUI:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
-		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/gcs_gui.py" > "${SCRIPT_DIR}/build/gcs_gui.log" 2>&1 &
-		echo "Tactical GCS: tools/gcs_gui.py in the background, log: ${SCRIPT_DIR}/build/gcs_gui.log"
-	elif [ "${CONTROL_PANEL:-0}" != "0" ] && [ -z "${HEADLESS}" ]; then
-		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/control_panel.py" > "${SCRIPT_DIR}/build/control_panel.log" 2>&1 &
-		echo "Control Panel: tools/control_panel.py in the background, log: ${SCRIPT_DIR}/build/control_panel.log"
-	fi
-
-	if [ "${WEB_GCS:-0}" != "0" ]; then
+	if [ "${WEB_GCS:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
 		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/web_gcs.py" --port "${WEB_GCS_PORT:-8080}" \
 			> "${SCRIPT_DIR}/build/web_gcs.log" 2>&1 &
 		echo "Web GCS:  http://localhost:${WEB_GCS_PORT:-8080} (3D Tactical Radar & C2), log: ${SCRIPT_DIR}/build/web_gcs.log"

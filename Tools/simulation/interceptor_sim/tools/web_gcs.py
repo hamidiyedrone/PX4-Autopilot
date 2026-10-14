@@ -226,7 +226,7 @@ def gz_transport_worker_thread(world="ankara", interceptor_name="interceptor_0",
 
 # ----------------------------------------------------------- MAVLink Worker ---
 
-def mavlink_worker_thread(primary_port=14545, fallback_ports=(14540, 14550, 14551)):
+def mavlink_worker_thread(primary_port=14540, fallback_ports=(14550, 14551, 14545)):
     global telemetry_data
     ports_to_try = [primary_port] + list(fallback_ports)
     link = None
@@ -271,28 +271,27 @@ def mavlink_worker_thread(primary_port=14545, fallback_ports=(14540, 14550, 1455
 
                 elif mtype == "HEARTBEAT":
                     inter["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-                    custom = msg.custom_mode
+                    custom = getattr(msg, "custom_mode", 0)
                     main_mode = (custom >> 16) & 0xFF
                     sub_mode = (custom >> 24) & 0xFF
-                    if main_mode == 1:
-                        inter["mode"] = "MANUAL"
-                    elif main_mode == 2:
-                        inter["mode"] = "ALTCTL"
+                    if (main_mode, sub_mode) == (4, 12) or main_mode == 23 or custom == 23:
+                        inter["mode"] = "INTERCEPT"
+                    elif (main_mode, sub_mode) == (4, 2):
+                        inter["mode"] = "TAKEOFF"
+                    elif (main_mode, sub_mode) == (4, 3):
+                        inter["mode"] = "HOLD"
+                    elif (main_mode, sub_mode) == (4, 6):
+                        inter["mode"] = "LAND"
                     elif main_mode == 3:
                         inter["mode"] = "POSCTL"
-                    elif main_mode == 4:
-                        if sub_mode == 3:
-                            inter["mode"] = "HOLD"
-                        elif sub_mode == 4:
-                            inter["mode"] = "TAKEOFF"
-                        elif sub_mode == 5:
-                            inter["mode"] = "LAND"
-                        else:
-                            inter["mode"] = "AUTO"
+                    elif main_mode == 2:
+                        inter["mode"] = "ALTCTL"
+                    elif main_mode == 1:
+                        inter["mode"] = "MANUAL"
                     elif main_mode == 6:
-                        inter["mode"] = "INTERCEPT"
+                        inter["mode"] = "OFFBOARD"
                     else:
-                        inter["mode"] = f"MODE_{main_mode}"
+                        inter["mode"] = f"MODE_{main_mode}:{sub_mode}"
 
         except Exception:
             link = None
