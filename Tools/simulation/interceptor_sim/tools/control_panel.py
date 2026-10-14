@@ -38,9 +38,12 @@ from urllib.parse import urlencode
 
 import yaml
 
+import signal
+
 os.environ.setdefault("MAVLINK20", "1")  # AVAILABLE_MODES is a MAVLink 2 message
 from pymavlink import mavutil  # noqa: E402
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QShortcut, QTransform
 from PySide6.QtWidgets import (
 	QApplication,
@@ -247,101 +250,118 @@ AUTOTUNE_PROFILES = {
 
 
 class TelemetryWorker(QObject):
-	"""Worker thread to poll target telemetry and dispatch commands asynchronously."""
+	"""Asynchronously poll target telemetry and dispatch commands via QNetworkAccessManager."""
 
 	telemetry_received = Signal(dict)
 
-	def __init__(self, host="127.0.0.1", port=8000):
-		super().__init__()
+	def __init__(self, host="127.0.0.1", port=8000, parent=None):
+		super().__init__(parent)
 		self.host = host
 		self.port = port
 		self.base_url = f"http://{host}:{port}"
+		self.nam = QNetworkAccessManager(self)
+		self._pending_reply = None
 		self._running = True
+
+	def stop(self):
+		self._running = False
+		if self._pending_reply is not None:
+			self._pending_reply.abort()
+			self._pending_reply = None
 
 	def poll(self):
 		if not self._running:
 			return
-		url = f"{self.base_url}/target"
-		try:
-			req = urllib.request.Request(url, headers={"User-Agent": "ControlPanel/1.0"})
-			with urllib.request.urlopen(req, timeout=0.35) as resp:
-				if resp.status == 200:
-					data = json.loads(resp.read().decode("utf-8"))
-					self.telemetry_received.emit(data)
-					return
-		except Exception:
-			pass
+		if self._pending_reply is not None and self._pending_reply.isRunning():
+			return
+		url = QUrl(f"{self.base_url}/target")
+		req = QNetworkRequest(url)
+		req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, "ControlPanel/1.0")
+		self._pending_reply = self.nam.get(req)
+		self._pending_reply.finished.connect(self._on_poll_finished)
+
+	def _on_poll_finished(self):
+		reply = self._pending_reply
+		self._pending_reply = None
+		if reply is None or not self._running:
+			if reply is not None:
+				reply.deleteLater()
+			return
+		if reply.error() == QNetworkReply.NetworkError.NoError:
+			try:
+				raw = bytes(reply.readAll()).decode("utf-8")
+				data = json.loads(raw)
+				self.telemetry_received.emit(data)
+			except Exception:
+				pass
+		reply.deleteLater()
 
 	def send_command(self, cmd_dict):
-		url = f"{self.base_url}/cmd"
-		try:
-			post_data = json.dumps(cmd_dict).encode("utf-8")
-			req = urllib.request.Request(
-				url,
-				data=post_data,
-				headers={"Content-Type": "application/json", "User-Agent": "ControlPanel/1.0"},
-				method="POST",
-			)
-			with urllib.request.urlopen(req, timeout=0.5) as resp:
-				pass
-		except Exception:
-			# Target might still be booting up
-			pass
+		url = QUrl(f"{self.base_url}/cmd")
+		req = QNetworkRequest(url)
+		req.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json")
+		req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, "ControlPanel/1.0")
+		post_data = json.dumps(cmd_dict).encode("utf-8")
+		reply = self.nam.post(req, post_data)
+		reply.finished.connect(reply.deleteLater)
 
 
 class DetectorWorker(QObject):
-	"""Worker to query and update sim_detector noise settings asynchronously."""
+	"""Asynchronously query and update sim_detector noise settings via QNetworkAccessManager."""
 
 	noise_received = Signal(dict)
 
-	def __init__(self, host="127.0.0.1", port=8002):
-		super().__init__()
+	def __init__(self, host="127.0.0.1", port=8002, parent=None):
+		super().__init__(parent)
 		self.host = host
 		self.port = port
 		self.base_url = f"http://{host}:{port}"
-		self._is_polling = False
+		self.nam = QNetworkAccessManager(self)
+		self._pending_reply = None
 
 	def poll(self):
-		if self._is_polling:
+		if self._pending_reply is not None and self._pending_reply.isRunning():
 			return
-		self._is_polling = True
+		url = QUrl(f"{self.base_url}/noise")
+		req = QNetworkRequest(url)
+		req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, "ControlPanel/1.0")
+		self._pending_reply = self.nam.get(req)
+		self._pending_reply.finished.connect(self._on_noise_finished)
 
-		def _worker():
+	def _on_noise_finished(self):
+		reply = self._pending_reply
+		self._pending_reply = None
+		if reply is None:
+			return
+		if reply.error() == QNetworkReply.NetworkError.NoError:
 			try:
-				url = f"{self.base_url}/noise"
-				req = urllib.request.Request(url, headers={"User-Agent": "ControlPanel/1.0"})
-				with urllib.request.urlopen(req, timeout=0.3) as resp:
-					if resp.status == 200:
-						data = json.loads(resp.read().decode("utf-8"))
-						if "noise" in data:
-							self.noise_received.emit(data["noise"])
+				raw = bytes(reply.readAll()).decode("utf-8")
+				data = json.loads(raw)
+				if "noise" in data:
+					self.noise_received.emit(data["noise"])
 			except Exception:
 				pass
-			finally:
-				self._is_polling = False
-
-		threading.Thread(target=_worker, daemon=True).start()
+		reply.deleteLater()
 
 	def send_command(self, cmd_dict):
-		def _worker():
+		url = QUrl(f"{self.base_url}/cmd")
+		req = QNetworkRequest(url)
+		req.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json")
+		req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, "ControlPanel/1.0")
+		post_data = json.dumps(cmd_dict).encode("utf-8")
+		reply = self.nam.post(req, post_data)
+		reply.finished.connect(lambda: self._on_cmd_finished(reply))
+
+	def _on_cmd_finished(self, reply):
+		if reply.error() == QNetworkReply.NetworkError.NoError:
 			try:
-				url = f"{self.base_url}/cmd"
-				post_data = json.dumps(cmd_dict).encode("utf-8")
-				req = urllib.request.Request(
-					url,
-					data=post_data,
-					headers={"Content-Type": "application/json", "User-Agent": "ControlPanel/1.0"},
-					method="POST",
-				)
-				with urllib.request.urlopen(req, timeout=0.5) as resp:
-					if resp.status == 200:
-						data = json.loads(resp.read().decode("utf-8"))
-						if "noise" in data:
-							self.noise_received.emit(data["noise"])
+				raw = bytes(reply.readAll()).decode("utf-8")
+				data = json.loads(raw)
+				if "noise" in data:
+					self.noise_received.emit(data["noise"])
 			except Exception:
 				pass
-
-		threading.Thread(target=_worker, daemon=True).start()
+		reply.deleteLater()
 
 
 class MavlinkWorker(QObject):
@@ -386,13 +406,20 @@ class MavlinkWorker(QObject):
 		last_heartbeat_sent = 0.0
 
 		while self._running:
-			msg = self.conn.recv_match(blocking=True, timeout=0.1)
+			try:
+				msg = self.conn.recv_match(blocking=True, timeout=0.1)
+			except Exception:
+				time.sleep(0.05)
+				continue
 			now = time.monotonic()
 
 			# GCS heartbeat: PX4 counts the GCS as connected (data link loss failsafe)
 			if now - last_heartbeat_sent > 1.0 and self.target_system is not None:
 				last_heartbeat_sent = now
-				self.conn.mav.heartbeat_send(mav.MAV_TYPE_GCS, mav.MAV_AUTOPILOT_INVALID, 0, 0, mav.MAV_STATE_ACTIVE)
+				try:
+					self.conn.mav.heartbeat_send(mav.MAV_TYPE_GCS, mav.MAV_AUTOPILOT_INVALID, 0, 0, mav.MAV_STATE_ACTIVE)
+				except Exception:
+					pass
 
 			if msg is not None:
 				t = msg.get_type()
@@ -510,13 +537,20 @@ class MavlinkWorker(QObject):
 				state["connected"] = now - state.get("last_heartbeat", 0.0) < 3.0
 				self.telemetry_received.emit(dict(state))
 
-		self.conn.close()
+		try:
+			if self.conn:
+				self.conn.close()
+		except Exception:
+			pass
 
 	def send_command(self, command, *params):
 		if self.conn is None or self.target_system is None or self.target_component is None:
 			return
-		p = list(params) + [0] * (7 - len(params))
-		self.conn.mav.command_long_send(self.target_system, self.target_component, command, 0, *p)
+		try:
+			p = list(params) + [0] * (7 - len(params))
+			self.conn.mav.command_long_send(self.target_system, self.target_component, command, 0, *p)
+		except Exception:
+			pass
 
 	def set_mode(self, custom_mode):
 		main_mode = (custom_mode >> 16) & 0xFF
@@ -526,31 +560,37 @@ class MavlinkWorker(QObject):
 	def request_param(self, name):
 		if self.conn is None or self.target_system is None or self.target_component is None:
 			return
-		param_id = name.encode("ascii")[:16]
-		self.conn.mav.param_request_read_send(
-			self.target_system,
-			self.target_component,
-			param_id,
-			-1,
-		)
+		try:
+			param_id = name.encode("ascii")[:16]
+			self.conn.mav.param_request_read_send(
+				self.target_system,
+				self.target_component,
+				param_id,
+				-1,
+			)
+		except Exception:
+			pass
 
 	def set_param(self, name, value, is_int=False):
 		if self.conn is None or self.target_system is None or self.target_component is None:
 			return
-		param_id = name.encode("ascii")[:16]
-		if is_int:
-			packed_val = struct.unpack("f", struct.pack("i", int(value)))[0]
-			ptype = mav.MAV_PARAM_TYPE_INT32
-		else:
-			packed_val = float(value)
-			ptype = mav.MAV_PARAM_TYPE_REAL32
-		self.conn.mav.param_set_send(
-			self.target_system,
-			self.target_component,
-			param_id,
-			packed_val,
-			ptype,
-		)
+		try:
+			param_id = name.encode("ascii")[:16]
+			if is_int:
+				packed_val = struct.unpack("f", struct.pack("i", int(value)))[0]
+				ptype = mav.MAV_PARAM_TYPE_INT32
+			else:
+				packed_val = float(value)
+				ptype = mav.MAV_PARAM_TYPE_REAL32
+			self.conn.mav.param_set_send(
+				self.target_system,
+				self.target_component,
+				param_id,
+				packed_val,
+				ptype,
+			)
+		except Exception:
+			pass
 
 	def save_params_to_storage(self):
 		"""Command PX4 to persist current parameters into non-volatile storage."""
@@ -585,13 +625,15 @@ class ControlPanelWindow(QMainWindow):
 		self.param_px4_items = {}
 		self._initial_params_requested = False
 
-		self.worker = TelemetryWorker(host, port)
-		self.detector_worker = DetectorWorker(host, detector_port)
+		self.worker = TelemetryWorker(host, port, parent=self)
+		self.detector_worker = DetectorWorker(host, detector_port, parent=self)
 		self.poll_timer = QTimer(self)
 		self.poll_timer.timeout.connect(self.worker.poll)
-		self.poll_timer.timeout.connect(self.detector_worker.poll)
+		self.detector_poll_timer = QTimer(self)
+		self.detector_poll_timer.timeout.connect(self.detector_worker.poll)
 		self.worker.telemetry_received.connect(self.on_telemetry)
 		self.detector_worker.noise_received.connect(self.on_detector_noise)
+		QTimer.singleShot(1000, self.detector_worker.poll)
 
 		# Directions currently held via D-pad buttons or arrow keys
 		self.held = set()
@@ -637,6 +679,7 @@ class ControlPanelWindow(QMainWindow):
 		self._setup_shortcuts()
 
 		self.poll_timer.start(180)  # ~5.5 Hz polling
+		self.detector_poll_timer.start(2000)  # 0.5 Hz detector sync
 		self.mav_thread.start()
 
 	def _init_ui(self):
@@ -1931,7 +1974,12 @@ class ControlPanelWindow(QMainWindow):
 				self.lbl_param_status.setText(f"PX4: {text}")
 
 	def closeEvent(self, event):
+		self.poll_timer.stop()
+		self.hold_timer.stop()
 		self.autotune_timer.stop()
+		if hasattr(self, "detector_poll_timer"):
+			self.detector_poll_timer.stop()
+		self.worker.stop()
 		self.mav_worker.stop()
 		self.mav_thread.quit()
 		self.mav_thread.wait(1000)
@@ -2066,6 +2114,12 @@ def main():
 	args = parser.parse_args()
 
 	app = QApplication(sys.argv)
+	signal.signal(signal.SIGINT, lambda *args: app.quit())
+	signal.signal(signal.SIGTERM, lambda *args: app.quit())
+	sig_timer = QTimer()
+	sig_timer.timeout.connect(lambda: None)
+	sig_timer.start(500)
+
 	win = ControlPanelWindow(host=args.host, port=args.port, mavlink_url=args.mavlink, detector_port=args.detector_port)
 	win.show()
 	sys.exit(app.exec())
