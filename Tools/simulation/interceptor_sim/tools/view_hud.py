@@ -29,6 +29,7 @@ import threading
 import time
 
 os.environ["MAVLINK20"] = "1"
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import cv2
 import numpy as np
