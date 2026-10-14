@@ -28,6 +28,7 @@ import copy
 import json
 import math
 import os
+import queue
 import struct
 import sys
 import threading
@@ -70,6 +71,29 @@ from PySide6.QtWidgets import (
 	QVBoxLayout,
 	QWidget,
 )
+
+_PATCH_APPLIED = False
+
+def _patch_pyside_setText_leak():
+	"""
+	Workaround for PySide6 6.12.0 Shiboken bug where setText(QString) returns Py_None
+	without Py_INCREF, leaking one reference to None on every call until none_dealloc crashes Python.
+	"""
+	global _PATCH_APPLIED
+	if _PATCH_APPLIED:
+		return
+	_PATCH_APPLIED = True
+	import ctypes
+	for cls in (QLabel, QLineEdit, QPushButton, QTableWidgetItem):
+		if hasattr(cls, "setText"):
+			orig = cls.setText
+			def _make_safe(fn):
+				def _safe(self, text):
+					res = fn(self, text)
+					ctypes.pythonapi.Py_IncRef(ctypes.py_object(None))
+					return res
+				return _safe
+			cls.setText = _make_safe(orig)
 
 # AVAILABLE_MODES is only in the development dialect of pymavlink (same CRC as PX4)
 mavutil.set_dialect("development")
@@ -364,13 +388,8 @@ class DetectorWorker(QObject):
 		reply.deleteLater()
 
 
-class MavlinkWorker(QObject):
-	"""Runs in its own thread: reads the PX4 MAVLink link, handles modes, telemetry and parameters."""
-
-	modes_received = Signal(list)  # [(name, custom_mode), ...]
-	telemetry_received = Signal(dict)
-	message_received = Signal(str)
-	param_received = Signal(str, float, int)  # param_name, value, param_type
+class MavlinkWorker:
+	"""Runs in a background thread: reads the PX4 MAVLink link, pushes events to event_queue, sends commands."""
 
 	# PX4 sends a name only for non-standard modes
 	STANDARD_MODE_NAMES = {
@@ -384,16 +403,30 @@ class MavlinkWorker(QObject):
 		8: "Takeoff",
 	}
 
-	def __init__(self, url):
-		super().__init__()
+	def __init__(self, url, event_queue):
 		self.url = url
+		self.event_queue = event_queue
 		self.conn = None
 		self.target_system = None
 		self.target_component = None
 		self._running = True
+		self._lock = threading.Lock()
+		self._thread = None
+
+	def start(self):
+		self._thread = threading.Thread(target=self.run, daemon=True)
+		self._thread.start()
 
 	def stop(self):
 		self._running = False
+		try:
+			with self._lock:
+				if self.conn:
+					self.conn.close()
+		except Exception:
+			pass
+		if self._thread and self._thread.is_alive():
+			self._thread.join(timeout=0.5)
 
 	def run(self):
 		self.conn = mavutil.mavlink_connection(self.url, source_system=255, source_component=mav.MAV_COMP_ID_MISSIONPLANNER)
@@ -417,7 +450,8 @@ class MavlinkWorker(QObject):
 			if now - last_heartbeat_sent > 1.0 and self.target_system is not None:
 				last_heartbeat_sent = now
 				try:
-					self.conn.mav.heartbeat_send(mav.MAV_TYPE_GCS, mav.MAV_AUTOPILOT_INVALID, 0, 0, mav.MAV_STATE_ACTIVE)
+					with self._lock:
+						self.conn.mav.heartbeat_send(mav.MAV_TYPE_GCS, mav.MAV_AUTOPILOT_INVALID, 0, 0, mav.MAV_STATE_ACTIVE)
 				except Exception:
 					pass
 
@@ -450,8 +484,8 @@ class MavlinkWorker(QObject):
 						name = self.STANDARD_MODE_NAMES.get(msg.standard_mode, f"Mode {msg.custom_mode:#x}")
 					modes[msg.mode_index] = (name, msg.custom_mode)
 					if len(modes) == number_modes:
-						self.modes_received.emit(
-							[modes[i] for i in sorted(modes) if not modes[i][0].startswith("(")]
+						self.event_queue.put(
+							("modes", [modes[i] for i in sorted(modes) if not modes[i][0].startswith("(")])
 						)
 
 				elif t == "PARAM_VALUE":
@@ -475,7 +509,7 @@ class MavlinkWorker(QObject):
 							val = float(struct.unpack("i", struct.pack("f", val))[0])
 						except Exception:
 							pass
-					self.param_received.emit(name, val, ptype)
+					self.event_queue.put(("param", (name, val, ptype)))
 
 				elif t == "ATTITUDE":
 					state["pitch_deg"] = math.degrees(msg.pitch)
@@ -514,13 +548,13 @@ class MavlinkWorker(QObject):
 					state["gps_fix"] = msg.fix_type
 
 				elif t == "STATUSTEXT":
-					self.message_received.emit(msg.text)
+					self.event_queue.put(("message", msg.text))
 
 				elif t == "COMMAND_ACK" and msg.result != mav.MAV_RESULT_ACCEPTED:
 					cmd = mav.enums["MAV_CMD"].get(msg.command)
 					res = mav.enums["MAV_RESULT"].get(msg.result)
-					self.message_received.emit(
-						f"{cmd.name if cmd else msg.command}: {res.name if res else msg.result}"
+					self.event_queue.put(
+						("message", f"{cmd.name if cmd else msg.command}: {res.name if res else msg.result}")
 					)
 
 			if self.target_system is None:
@@ -532,14 +566,15 @@ class MavlinkWorker(QObject):
 				modes_requested = now
 				self.send_command(mav.MAV_CMD_REQUEST_MESSAGE, mav.MAVLINK_MSG_ID_AVAILABLE_MODES, 0)
 
-			if now - last_emit > 0.2:
+			if now - last_emit > 0.15:
 				last_emit = now
 				state["connected"] = now - state.get("last_heartbeat", 0.0) < 3.0
-				self.telemetry_received.emit(dict(state))
+				self.event_queue.put(("telemetry", dict(state)))
 
 		try:
-			if self.conn:
-				self.conn.close()
+			with self._lock:
+				if self.conn:
+					self.conn.close()
 		except Exception:
 			pass
 
@@ -548,7 +583,8 @@ class MavlinkWorker(QObject):
 			return
 		try:
 			p = list(params) + [0] * (7 - len(params))
-			self.conn.mav.command_long_send(self.target_system, self.target_component, command, 0, *p)
+			with self._lock:
+				self.conn.mav.command_long_send(self.target_system, self.target_component, command, 0, *p)
 		except Exception:
 			pass
 
@@ -562,12 +598,13 @@ class MavlinkWorker(QObject):
 			return
 		try:
 			param_id = name.encode("ascii")[:16]
-			self.conn.mav.param_request_read_send(
-				self.target_system,
-				self.target_component,
-				param_id,
-				-1,
-			)
+			with self._lock:
+				self.conn.mav.param_request_read_send(
+					self.target_system,
+					self.target_component,
+					param_id,
+					-1,
+				)
 		except Exception:
 			pass
 
@@ -582,13 +619,14 @@ class MavlinkWorker(QObject):
 			else:
 				packed_val = float(value)
 				ptype = mav.MAV_PARAM_TYPE_REAL32
-			self.conn.mav.param_set_send(
-				self.target_system,
-				self.target_component,
-				param_id,
-				packed_val,
-				ptype,
-			)
+			with self._lock:
+				self.conn.mav.param_set_send(
+					self.target_system,
+					self.target_component,
+					param_id,
+					packed_val,
+					ptype,
+				)
 		except Exception:
 			pass
 
@@ -606,6 +644,7 @@ class ControlPanelWindow(QMainWindow):
 
 	def __init__(self, host="127.0.0.1", port=8000, mavlink_url="udpin:0.0.0.0:14550", detector_port=8002):
 		super().__init__()
+		_patch_pyside_setText_leak()
 		self.host = host
 		self.port = port
 		self.detector_port = detector_port
@@ -663,24 +702,39 @@ class ControlPanelWindow(QMainWindow):
 		self.best_trial_idx = -1
 		self.initial_params_backup = {}
 
-		# Interceptor (PX4) link in its own thread
+		# Interceptor (PX4) link in its own background thread
 		self.drone_armed = False
 		self.drone_custom_mode = None
-		self.mav_worker = MavlinkWorker(mavlink_url)
-		self.mav_thread = QThread(self)
-		self.mav_worker.moveToThread(self.mav_thread)
-		self.mav_thread.started.connect(self.mav_worker.run)
-		self.mav_worker.modes_received.connect(self.on_modes)
-		self.mav_worker.telemetry_received.connect(self.on_drone_telemetry)
-		self.mav_worker.message_received.connect(self.on_drone_message)
-		self.mav_worker.param_received.connect(self.on_param_received)
+		self.mav_queue = queue.Queue()
+		self.mav_worker = MavlinkWorker(mavlink_url, self.mav_queue)
+		self.mav_worker.start()
+
+		self.mav_drain_timer = QTimer(self)
+		self.mav_drain_timer.setInterval(30)  # ~33 Hz queue drain
+		self.mav_drain_timer.timeout.connect(self._drain_mav_queue)
 
 		self._init_ui()
 		self._setup_shortcuts()
 
 		self.poll_timer.start(180)  # ~5.5 Hz polling
 		self.detector_poll_timer.start(2000)  # 0.5 Hz detector sync
-		self.mav_thread.start()
+		self.mav_drain_timer.start()
+
+	def _drain_mav_queue(self):
+		while not self.mav_queue.empty():
+			try:
+				ev_type, ev_data = self.mav_queue.get_nowait()
+			except queue.Empty:
+				break
+			if ev_type == "telemetry":
+				self.on_drone_telemetry(ev_data)
+			elif ev_type == "modes":
+				self.on_modes(ev_data)
+			elif ev_type == "param":
+				name, val, ptype = ev_data
+				self.on_param_received(name, val, ptype)
+			elif ev_type == "message":
+				self.on_drone_message(ev_data)
 
 	def _init_ui(self):
 		self.tabs = QTabWidget(self)
@@ -1962,9 +2016,12 @@ class ControlPanelWindow(QMainWindow):
 		self.drone_tel["heading"].setText(fmt("heading_deg", ".0f", "°"))
 		battery = data.get("battery_pct")
 		self.drone_tel["battery"].setText(f"{battery}%" if battery is not None and battery >= 0 else "--")
-		if "gps_fix" in data:
+		if "gps_fix" in data and data["gps_fix"] is not None:
 			fix = {0: "No GPS", 1: "No fix", 2: "2D", 3: "3D", 4: "DGPS", 5: "RTK float", 6: "RTK fixed"}
-			self.drone_tel["gps"].setText(f"{fix.get(data['gps_fix'], data['gps_fix'])}, {data['gps_sats']} sat")
+			sats = data.get("gps_sats", 0)
+			self.drone_tel["gps"].setText(f"{fix.get(data['gps_fix'], data['gps_fix'])}, {sats} sat")
+		else:
+			self.drone_tel["gps"].setText("--")
 
 	def on_drone_message(self, text):
 		self.lbl_drone_msg.setText(text)
@@ -1979,10 +2036,10 @@ class ControlPanelWindow(QMainWindow):
 		self.autotune_timer.stop()
 		if hasattr(self, "detector_poll_timer"):
 			self.detector_poll_timer.stop()
+		if hasattr(self, "mav_drain_timer"):
+			self.mav_drain_timer.stop()
 		self.worker.stop()
 		self.mav_worker.stop()
-		self.mav_thread.quit()
-		self.mav_thread.wait(1000)
 		super().closeEvent(event)
 
 	def _setup_shortcuts(self):
@@ -2114,6 +2171,7 @@ def main():
 	args = parser.parse_args()
 
 	app = QApplication(sys.argv)
+	_patch_pyside_setText_leak()
 	signal.signal(signal.SIGINT, lambda *args: app.quit())
 	signal.signal(signal.SIGTERM, lambda *args: app.quit())
 	sig_timer = QTimer()
