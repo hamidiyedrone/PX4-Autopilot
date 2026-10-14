@@ -1,0 +1,17 @@
+# Python requirements for Octopus Interceptor Simulation (Gazebo Harmonic & SITL)
+
+# GUI and Ground Control Panel
+PySide6>=6.5.0
+
+# Computer Vision & MAVLink Telemetry
+opencv-python>=4.5.0
+pymavlink>=2.4.30
+numpy>=1.20.0
+pyyaml>=6.0
+
+# Protobuf Compatibility Note:
+# Gazebo Harmonic gz-msgs uses Protobuf generated code.
+# If using protobuf>=4.x (common with modern ML libraries), sim.sh automatically sets:
+#   export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+# Alternatively, in standalone virtual environments, you can pin:
+# protobuf<=3.20.3
