@@ -179,8 +179,8 @@ class Profile:
 			res = {}
 			if "mode" in cmd:
 				m = str(cmd["mode"]).lower()
-				if m in ("straight", "s_turn", "weave", "orbit", "square", "circle"):
-					target_m = "s_turn" if m == "weave" else ("orbit" if m == "circle" else m)
+				if m in ("straight", "s_turn", "weave", "orbit", "square"):
+					target_m = "s_turn" if m == "weave" else m
 					if target_m != self.mode:
 						if target_m == "straight":
 							self.target_heading = getattr(self, "base_heading", self.current_heading)
@@ -189,32 +189,6 @@ class Profile:
 							self.wave_phase = 0.0
 						self.mode = target_m
 					res["mode"] = self.mode
-				elif m == "dive":
-					self.target_alt = float(np.clip(self.target_alt - 35.0, 20.0, 250.0))
-					res["alt"] = self.target_alt
-				elif m == "climb":
-					self.target_alt = float(np.clip(self.target_alt + 35.0, 20.0, 250.0))
-					res["alt"] = self.target_alt
-
-			if "turn_rate" in cmd:
-				try:
-					tr = float(cmd["turn_rate"])
-					if abs(tr) > 1e-4:
-						self.mode = "straight"
-						self.target_heading = (self.current_heading + tr * 0.4 + math.pi) % (2 * math.pi) - math.pi
-						self.base_heading = self.target_heading
-					res["turn_rate"] = tr
-				except (ValueError, TypeError):
-					pass
-
-			if "climb_rate" in cmd:
-				try:
-					cr = float(cmd["climb_rate"])
-					if abs(cr) > 1e-4:
-						self.target_alt = float(np.clip(self.target_alt + cr * 3.0, 20.0, 250.0))
-					res["climb_rate"] = cr
-				except (ValueError, TypeError):
-					pass
 
 			if "wave_amp" in cmd:
 				try:

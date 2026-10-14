@@ -184,7 +184,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud|control_panel|gcs_gui|web_gcs).py"); do
+	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud|control_panel).py"); do
 		pids+=("${p}")
 	done
 
@@ -250,11 +250,9 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 	echo "Target: tools/target_sim.py in the background, log: ${SCRIPT_DIR}/build/target_sim.log"
 	echo "        position: http://localhost:8000/target (2 Hz), ADS-B in QGroundControl"
 
-	if [ "${WEB_GCS:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
-		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/web_gcs.py" --port "${WEB_GCS_PORT:-8080}" \
-			> "${SCRIPT_DIR}/build/web_gcs.log" 2>&1 &
-		echo "Web GCS:  http://localhost:${WEB_GCS_PORT:-8080} (3D Tactical Radar & C2), log: ${SCRIPT_DIR}/build/web_gcs.log"
-		( sleep 1.5; xdg-open "http://localhost:${WEB_GCS_PORT:-8080}" >/dev/null 2>&1 || true ) &
+	if [ "${CONTROL_PANEL:-1}" != "0" ] && [ -z "${HEADLESS}" ]; then
+		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/control_panel.py" > "${SCRIPT_DIR}/build/control_panel.log" 2>&1 &
+		echo "Control Panel: tools/control_panel.py in the background, log: ${SCRIPT_DIR}/build/control_panel.log"
 	fi
 
 	if [ "${RELAY:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
