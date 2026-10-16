@@ -47,8 +47,8 @@
 
 set -e
 
-for arg in "$@"; do
-	case "${arg}" in
+while [ $# -gt 0 ]; do
+	case "$1" in
 		--gui)
 			GZ_GUI=1
 			;;
@@ -61,7 +61,22 @@ for arg in "$@"; do
 		--no-view)
 			VIEW=0
 			;;
+		--scenario=*)
+			SCENARIO="${1#*=}"
+			;;
+		--scenario)
+			shift
+			SCENARIO="$1"
+			;;
+		--head-on-dist=*)
+			HEAD_ON_DIST="${1#*=}"
+			;;
+		--head-on-dist)
+			shift
+			HEAD_ON_DIST="$1"
+			;;
 	esac
+	shift
 done
 
 GZ_GUI="${GZ_GUI:-${GUI:-0}}"
@@ -76,6 +91,23 @@ WORLD="${WORLD:-ankara}"
 TARGET_POSE_DEFAULT="0,0,0.15,0,0,0"
 # shellcheck disable=SC1090
 [ -f "${SCRIPT_DIR}/worlds/${WORLD}.env" ] && . "${SCRIPT_DIR}/worlds/${WORLD}.env"
+
+if [ "${SCENARIO}" = "head_on" ]; then
+	HEAD_ON_DIST="${HEAD_ON_DIST:-2500.0}"
+	IFS=, read -r tx ty tz tr tp tyaw <<< "${TARGET_POSE_DEFAULT:-0,0,0.15,0,0,0.3927}"
+	read -r hx hy hz hyaw < <(python3 -c "
+import math
+yaw0 = float('${tyaw}')
+d = float('${HEAD_ON_DIST}')
+ux, uy = math.cos(yaw0), math.sin(yaw0)
+x = float('${tx}') + ux * d
+y = float('${ty}') + uy * d
+yaw = (yaw0 + math.pi) % (2 * math.pi)
+print(f'{x:.2f} {y:.2f} 100.0 {yaw:.4f}')
+")
+	TARGET_POSE="${hx},${hy},${hz},0,0,${hyaw}"
+	TARGET_ARGS="${TARGET_ARGS:-} --scenario head_on --head-on-dist ${HEAD_ON_DIST}"
+fi
 TARGET_POSE="${TARGET_POSE:-${TARGET_POSE_DEFAULT}}"
 TARGET_INSTANCE=1
 TARGET_NAME="talon1718_${TARGET_INSTANCE}"

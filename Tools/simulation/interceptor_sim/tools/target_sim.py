@@ -32,7 +32,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
+from gz.msgs10.boolean_pb2 import Boolean
 from gz.msgs10.clock_pb2 import Clock
+from gz.msgs10.pose_pb2 import Pose
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.msgs10.twist_pb2 import Twist
 from gz.transport13 import Node
@@ -129,8 +131,9 @@ def square_circuit(side, heading, radius):
 class Profile:
 	"""Speed and altitude along the path: take-off roll, climb, cruise; continuous straight, s-turn, orbit, weave, or square."""
 
-	def __init__(self, a):
+	def __init__(self, a, p_headon=None, yaw_headon=None, p_runway=None):
 		self.a = a
+		self.scenario = getattr(a, "scenario", "default")
 		self.pattern = getattr(a, "pattern", "straight")
 		if self.pattern == "weave":
 			self.mode = "s_turn"
@@ -142,6 +145,9 @@ class Profile:
 		self.yaw0 = math.radians(90 - a.heading)
 		self.u = np.array([math.cos(self.yaw0), math.sin(self.yaw0)])
 		self.n = np.array([-self.u[1], self.u[0]])  # left normal
+		self.p_headon = p_headon
+		self.yaw_headon = yaw_headon
+		self.reset_telemetry = False
 
 		self.wave_amp = float(getattr(a, "weave_amp", 1.5))
 		self.wave_len = float(getattr(a, "weave_wavelength", 120.0))
@@ -154,24 +160,36 @@ class Profile:
 			self.path = None
 			self.lap = 0.0
 
-		self.s_roll = a.speed ** 2 / (2 * a.accel)
 		self.gamma = math.radians(a.climb_angle)
-		self.s_climb_end = self.s_roll + (a.alt - a.z0) / math.tan(self.gamma)
-
-		# Dynamic interactive cruise variables
-		self.target_speed = float(a.speed)
-		self.target_alt = float(a.alt)
-		self.target_heading = float(self.yaw0)
-		self.base_heading = float(self.yaw0)
 		self.orbit_dir = 1.0  # +1 left (CCW), -1 right (CW)
 		self.orbit_bank_deg = float(getattr(a, "bank", 28.0))
 
-		self.current_speed = 0.0
-		self.current_z = float(a.z0)
-		self.current_heading = float(self.yaw0)
-		self.current_roll = 0.0
-		self.cruise_p = None
-		self.last_t = None
+		if self.scenario == "head_on" and p_headon is not None:
+			self.s_roll = 0.0
+			self.s_climb_end = 0.0
+			self.target_speed = float(a.speed)
+			self.target_alt = float(a.alt)
+			self.target_heading = float(yaw_headon) if yaw_headon is not None else float(self.yaw0)
+			self.base_heading = self.target_heading
+			self.current_speed = float(a.speed)
+			self.current_z = float(a.alt)
+			self.current_heading = self.target_heading
+			self.current_roll = 0.0
+			self.cruise_p = np.array([p_headon[0], p_headon[1], float(a.alt)])
+			self.last_t = None
+		else:
+			self.s_roll = a.speed ** 2 / (2 * a.accel)
+			self.s_climb_end = self.s_roll + (a.alt - a.z0) / math.tan(self.gamma)
+			self.target_speed = float(a.speed)
+			self.target_alt = float(a.alt)
+			self.target_heading = float(self.yaw0)
+			self.base_heading = float(self.yaw0)
+			self.current_speed = 0.0
+			self.current_z = float(a.z0)
+			self.current_heading = float(self.yaw0)
+			self.current_roll = 0.0
+			self.cruise_p = None
+			self.last_t = None
 
 	def apply_command(self, cmd):
 		with self.lock:
@@ -244,9 +262,13 @@ class Profile:
 			return res
 
 	def speed_at(self, t):
+		if self.scenario == "head_on":
+			return self.target_speed
 		return min(self.a.speed, self.a.accel * t)
 
 	def s_at(self, t):
+		if self.scenario == "head_on":
+			return self.target_speed * t
 		t_acc = self.a.speed / self.a.accel
 		return 0.5 * self.a.accel * t * t if t < t_acc else self.s_roll + self.a.speed * (t - t_acc)
 
@@ -256,7 +278,7 @@ class Profile:
 			s = self.s_at(t)
 			v = self.speed_at(t)
 
-			if s < self.s_roll:
+			if self.scenario != "head_on" and s < self.s_roll:
 				# Take-off roll along runway
 				p2, yaw, kappa = s * self.u, self.yaw0, 0.0
 				z, gamma = self.a.z0, 0.0
@@ -270,7 +292,7 @@ class Profile:
 				self.current_z = z
 				return np.array([p2[0], p2[1], z]), vel, R, omega
 
-			elif s < self.s_climb_end:
+			elif self.scenario != "head_on" and s < self.s_climb_end:
 				# Initial steady climb to cruise altitude
 				p2, yaw, kappa = s * self.u, self.yaw0, 0.0
 				z = self.a.z0 + (s - self.s_roll) * math.tan(self.gamma)
@@ -500,6 +522,9 @@ def main():
 	ap.add_argument("--heading", type=float, default=None, help="first side [deg true], default: runway")
 	ap.add_argument("--pattern", choices=["straight", "weave", "orbit", "square"], default="straight",
 			help="flight path pattern: 'straight', 'weave' (S-turns), 'orbit' (circle), or 'square' (square circuit)")
+	ap.add_argument("--scenario", choices=["default", "head_on"], default="default",
+			help="flight scenario: 'default' (runway takeoff & climb) or 'head_on' (airborne inbound from opposite runway end)")
+	ap.add_argument("--head-on-dist", type=float, default=2500.0, help="initial distance for head-on scenario [m]")
 	ap.add_argument("--weave-amp", type=float, default=1.5, help="lateral weave amplitude [m] (controls drift corridor)")
 	ap.add_argument("--weave-wavelength", type=float, default=120.0, help="weave cycle wavelength [m]")
 	ap.add_argument("--rate", type=float, default=2.0, help="telemetry rate [Hz]")
@@ -514,12 +539,21 @@ def main():
 	env = open(os.path.join(SIM_DIR, "worlds", a.world + ".env")).read()
 	pose = [float(v) for v in re.search(r"TARGET_POSE_DEFAULT=([^\n]+)", env).group(1).split(",")]
 
-	if a.heading is None:
-		a.heading = 90 - math.degrees(pose[5])
+	p_runway = np.array([pose[0], pose[1], pose[2]])
+	yaw_runway = pose[5]
+	ux_rw = math.cos(yaw_runway)
+	uy_rw = math.sin(yaw_runway)
+	p_headon = np.array([pose[0] + a.head_on_dist * ux_rw, pose[1] + a.head_on_dist * uy_rw, float(a.alt)])
+	yaw_headon = (yaw_runway + math.pi) % (2 * math.pi)
+
+	if a.scenario == "head_on" and a.heading is None:
+		a.heading = (90 - math.degrees(yaw_headon)) % 360
+	elif a.heading is None:
+		a.heading = (90 - math.degrees(yaw_runway)) % 360
 
 	a.z0 = pose[2]
 
-	profile = Profile(a)
+	profile = Profile(a, p_headon=p_headon, yaw_headon=yaw_headon)
 	telemetry = Telemetry(lat0, lon0, alt0)
 	serve_http(telemetry, profile, a.http_port)
 	adsb = mavutil.mavlink_connection(a.adsb, source_system=250, source_component=1) if a.adsb else None
@@ -536,7 +570,9 @@ def main():
 	node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
 	cmd_pub = node.advertise(f"/model/{a.model}/cmd_vel", Twist)
 
-	if profile.pattern == "square":
+	if profile.scenario == "head_on":
+		print(f"target: HEAD-ON scenario (airborne at {a.alt:.0f} m, {a.head_on_dist:.0f} m down runway, {a.speed:.0f} m/s inbound); HTTP :{a.http_port}/target, ADS-B {a.adsb or 'off'}", flush=True)
+	elif profile.pattern == "square":
 		print(f"target: {a.side:.0f} m square, {a.alt:.0f} m, {a.speed:.0f} m/s, turn radius {profile.radius:.0f} m, "
 		      f"lap {profile.lap:.0f} m; HTTP :{a.http_port}/target, ADS-B {a.adsb or 'off'}", flush=True)
 	elif profile.pattern == "weave":
@@ -556,6 +592,9 @@ def main():
 
 	while True:
 		time.sleep(0.02)
+		if getattr(profile, "reset_telemetry", False):
+			profile.reset_telemetry = False
+			prev = None
 		t_sim = state["t"]
 		t = t_sim - t_start
 		pp = state["pose"]
@@ -563,8 +602,8 @@ def main():
 		R = quat_to_rot(pp.orientation.w, pp.orientation.x, pp.orientation.y, pp.orientation.z)
 
 		p_d, v_d, R_d, w_d = profile.state(t)
-		v_cmd_world = v_d + 1.5 * (p_d - p)
-		w_cmd_body = 4.0 * rot_log(R.T @ R_d) + R.T @ w_d
+		v_cmd_world = np.clip(v_d + 1.5 * (p_d - p), -35.0, 35.0)
+		w_cmd_body = np.clip(4.0 * rot_log(R.T @ R_d) + R.T @ w_d, -3.0, 3.0)
 		msg = Twist()
 		(msg.linear.x, msg.linear.y, msg.linear.z) = R.T @ v_cmd_world
 		(msg.angular.x, msg.angular.y, msg.angular.z) = w_cmd_body
