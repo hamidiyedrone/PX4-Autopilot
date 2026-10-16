@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2026 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2026 Hamidiye Savunma Teknolojileri. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -12,7 +12,7 @@
  *    notice, this list of conditions and the following disclaimer in
  *    the documentation and/or other materials provided with the
  *    distribution.
- * 3. Neither the name PX4 nor the names of its contributors may be
+ * 3. Neither the name Hamidiye Savunma Teknolojileri nor the names of its contributors may be
  *    used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -33,6 +33,7 @@
 
 #pragma once
 
+#include "PayloadController.hpp"
 #include <lib/geo/geo.h>
 #include <matrix/matrix/math.hpp>
 #include <px4_platform_common/module.h>
@@ -98,7 +99,6 @@ private:
 	void ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 	void ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 	void ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
-	void UpdateTurretControl();
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -115,10 +115,9 @@ private:
 	uORB::Publication<unregister_ext_component_s> _unregister_ext_component_pub{ORB_ID(unregister_ext_component)};
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
-	uORB::Publication<actuator_servos_s> _actuator_servos_pub{ORB_ID(actuator_servos)};
 
-	// Turret state
-	float _turret_pitch_deg{0.f};
+	// Subsystem controllers
+	PayloadController _payload_controller{this};
 
 	// Registration state
 	bool _sent_mode_registration{false};
@@ -196,7 +195,6 @@ private:
 		(ParamFloat<px4::params::INT_TRM_ACC_Z>) _param_int_trm_acc_z,
 		(ParamFloat<px4::params::INT_TRM_YAWRATE>) _param_int_trm_yawrate,
 		(ParamFloat<px4::params::INT_TRM_TC_GAIN>) _param_int_trm_tc_gain,
-		(ParamFloat<px4::params::INT_TURRET_PITCH>) _param_int_turret_pitch,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max
 	)

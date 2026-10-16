@@ -698,7 +698,9 @@ def main():
     node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
     node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
-    node.subscribe(Double, f"/model/{a.interceptor}/servo_0", on_turret_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/servo_0", on_gmb_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/command/turret_pitch", on_turret_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/servo_1", on_turret_pitch)
     node.subscribe(Double_V, f"/model/{a.interceptor}/detection", on_detection)
 
     def on_net_telem(msg):

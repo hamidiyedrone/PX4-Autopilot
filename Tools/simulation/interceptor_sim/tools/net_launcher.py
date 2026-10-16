@@ -210,6 +210,7 @@ class NetLauncher:
 		self.prev_int_pos = None
 		self.prev_int_time = None
 		self.turret_pitch_deg = 0.0
+		self.trigger_active = False
 
 		self.launch_count = 0
 		self.nets = []
@@ -224,7 +225,9 @@ class NetLauncher:
 
 		self.node.subscribe(Clock, f"/world/{world}/clock", self._on_clock)
 		self.node.subscribe(Pose_V, f"/world/{world}/dynamic_pose/info", self._on_pose)
-		self.node.subscribe(Double, f"/model/{interceptor}/servo_0", self._on_turret_servo)
+		self.node.subscribe(Double, f"/model/{interceptor}/servo_1", self._on_turret_servo)
+		self.node.subscribe(Double, f"/model/{interceptor}/command/turret_pitch", self._on_turret_servo)
+		self.node.subscribe(Double, f"/model/{interceptor}/servo_2", self._on_trigger_servo)
 
 		self.server = ThreadingHTTPServer(("0.0.0.0", http_port), self._make_handler())
 		threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -257,6 +260,20 @@ class NetLauncher:
 	def _on_turret_servo(self, msg):
 		with self.lock:
 			self.turret_pitch_deg = math.degrees(msg.data)
+
+	def _on_trigger_servo(self, msg):
+		should_fire = False
+		with self.lock:
+			if msg.data > 0.5:
+				if not self.trigger_active:
+					self.trigger_active = True
+					should_fire = True
+			else:
+				self.trigger_active = False
+
+		if should_fire:
+			print(f"NetLauncher: Trigger signal received from PX4 servo_2 ({msg.data:.2f} rad), firing net!", flush=True)
+			self.fire()
 
 	# --- commands ---
 

@@ -159,6 +159,11 @@ def load_intercept_param_metadata():
 				"short": "Terminal lateral position proportional gain",
 				"long": "Proportional gain (m/s per meter lateral offset) for centering target horizontally."
 			},
+			"INT_TRM_LAT_TOL": {
+				"name": "INT_TRM_LAT_TOL", "type": "float", "default": 0.05, "min": 0.01, "max": 0.20, "decimal": 2,
+				"short": "Terminal lateral optical deadband tolerance",
+				"long": "Normalized deadband tolerance on target horizontal optical error [-1.0, 1.0]."
+			},
 			"INT_TRM_LAT_MAX": {
 				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "decimal": 1,
 				"short": "Terminal maximum lateral strafe speed",
@@ -198,6 +203,75 @@ def load_intercept_param_metadata():
 				"name": "INT_TRM_TC_GAIN", "type": "float", "default": 0.30, "min": 0.0, "max": 1.5, "decimal": 2,
 				"short": "Turn coordinator roll feedback gain",
 				"long": "Feeds back roll angle into yaw guidance to assist bank-to-turn entry and actively drive steady-state roll back to zero."
+			},
+			"INT_GMB_SERVO": {
+				"name": "INT_GMB_SERVO", "type": "int32", "default": 1, "min": 0, "max": 8, "decimal": 0,
+				"short": "Gimbal pitch servo output index (1-8, 0=disabled)", "long": "Actuator servo channel for camera gimbal elevation."
+			},
+			"INT_TRT_SERVO": {
+				"name": "INT_TRT_SERVO", "type": "int32", "default": 2, "min": 0, "max": 8, "decimal": 0,
+				"short": "Turret pitch servo output index (1-8, 0=disabled)", "long": "Actuator servo channel for net gun turret elevation."
+			},
+			"INT_TRG_SERVO": {
+				"name": "INT_TRG_SERVO", "type": "int32", "default": 3, "min": 0, "max": 8, "decimal": 0,
+				"short": "Net trigger servo output index (1-8, 0=disabled)", "long": "Actuator servo channel for firing net gun."
+			},
+			"INT_TURRET_PITCH": {
+				"name": "INT_TURRET_PITCH", "type": "float", "default": 0.0, "min": 0.0, "max": 45.0, "decimal": 1,
+				"short": "Net gun turret pitch tilt angle (deg)", "long": "Manual turret pitch angle."
+			},
+			"INT_TRT_MIN_P": {
+				"name": "INT_TRT_MIN_P", "type": "float", "default": 0.0, "min": -30.0, "max": 90.0, "decimal": 1,
+				"short": "Turret minimum pitch angle (deg)", "long": "Minimum allowable turret pitch elevation."
+			},
+			"INT_TRT_MAX_P": {
+				"name": "INT_TRT_MAX_P", "type": "float", "default": 45.0, "min": 0.0, "max": 90.0, "decimal": 1,
+				"short": "Turret maximum pitch angle (deg)", "long": "Maximum allowable turret pitch elevation."
+			},
+			"INT_GMB_MIN_P": {
+				"name": "INT_GMB_MIN_P", "type": "float", "default": -60.0, "min": -90.0, "max": 0.0, "decimal": 1,
+				"short": "Gimbal minimum pitch angle (deg)", "long": "Minimum allowable seeker gimbal elevation."
+			},
+			"INT_GMB_MAX_P": {
+				"name": "INT_GMB_MAX_P", "type": "float", "default": 60.0, "min": 0.0, "max": 90.0, "decimal": 1,
+				"short": "Gimbal maximum pitch angle (deg)", "long": "Maximum allowable seeker gimbal elevation."
+			},
+			"INT_GMB_KP": {
+				"name": "INT_GMB_KP", "type": "float", "default": 60.0, "min": 0.0, "max": 200.0, "decimal": 1,
+				"short": "Gimbal PI proportional gain (Kp)", "long": "Gimbal pitch optical tracking proportional gain."
+			},
+			"INT_GMB_KI": {
+				"name": "INT_GMB_KI", "type": "float", "default": 10.0, "min": 0.0, "max": 50.0, "decimal": 1,
+				"short": "Gimbal PI integral gain (Ki)", "long": "Gimbal pitch optical tracking integral gain."
+			},
+			"INT_TRT_MODE": {
+				"name": "INT_TRT_MODE", "type": "int32", "default": 0, "min": 0, "max": 1, "decimal": 0,
+				"short": "Turret control mode (0=Manual, 1=Auto-Aim)", "long": "Turret auto-aim (gimbal + offset)."
+			},
+			"INT_TRT_OFFSET": {
+				"name": "INT_TRT_OFFSET", "type": "float", "default": 0.0, "min": -45.0, "max": 45.0, "decimal": 1,
+				"short": "Turret gimbal offset (+/- deg)", "long": "Angular offset added directly to gimbal pitch for turret aim."
+			},
+			"INT_AUTO_FIRE": {
+				"name": "INT_AUTO_FIRE", "type": "int32", "default": 0, "min": 0, "max": 1, "decimal": 0,
+				"short": "Auto-fire net when in range (0=Off, 1=On)", "long": "Autonomous firing on target intercept."
+			},
+			"INT_FIRE_DIST": {
+				"name": "INT_FIRE_DIST", "type": "float", "default": 20.0, "min": 5.0, "max": 40.0, "decimal": 1,
+				"short": "Auto-fire effective distance threshold (m)", "long": "Distance threshold for auto firing net."
+			},
+			"INT_FIRE_TOL": {
+				"name": "INT_FIRE_TOL", "type": "float", "default": 3.0, "min": 0.5, "max": 15.0, "decimal": 1,
+				"short": "Auto-fire angular aim tolerance (deg)", "long": "Boresight angle tolerance for auto fire."
+			},
+			"INT_TRG_PULSE": {
+				"name": "INT_TRG_PULSE", "type": "float", "default": 0.5, "min": 0.1, "max": 3.0, "decimal": 2,
+				"short": "Net trigger servo pulse duration (s)", "long": "Pulse time before trigger resets to safe."
+			},
+			"INT_TRIGGER": {
+				"name": "INT_TRIGGER", "type": "int32", "default": 0, "min": 0, "max": 1, "decimal": 0,
+				"short": "Manual trigger command parameter (1=Fire net)",
+				"long": "Command parameter to manually pulse net trigger servo."
 			},
 		}
 	return params
@@ -956,6 +1030,32 @@ class ControlPanelWindow(QMainWindow):
 		top_row.addStretch()
 		turret_layout.addLayout(top_row)
 
+		# Mode, Offset, and Auto-Fire row
+		mode_row = QHBoxLayout()
+		mode_row.addWidget(QLabel("Aim:"))
+		self.combo_turret_mode = QComboBox()
+		self.combo_turret_mode.addItems(["Manual", "Auto-Aim (Gimbal + Offset)"])
+		self.combo_turret_mode.setFixedHeight(24)
+		mode_row.addWidget(self.combo_turret_mode, 1)
+
+		mode_row.addWidget(QLabel("Offset:"))
+		self.spin_turret_offset = QDoubleSpinBox()
+		self.spin_turret_offset.setRange(-45.0, 45.0)
+		self.spin_turret_offset.setSingleStep(0.5)
+		self.spin_turret_offset.setDecimals(1)
+		self.spin_turret_offset.setSuffix("°")
+		self.spin_turret_offset.setValue(0.0)
+		self.spin_turret_offset.setFixedWidth(70)
+		self.spin_turret_offset.setFixedHeight(24)
+		self.spin_turret_offset.setEnabled(False)
+		self.spin_turret_offset.setToolTip("Angular offset added directly to gimbal pitch for turret auto-aim (INT_TRT_OFFSET)")
+		mode_row.addWidget(self.spin_turret_offset)
+
+		self.chk_auto_fire = QCheckBox("Auto-Fire")
+		self.chk_auto_fire.setToolTip("Autonomous net firing when target is locked inside effective corridor")
+		mode_row.addWidget(self.chk_auto_fire)
+		turret_layout.addLayout(mode_row)
+
 		# Slider and Spinbox row
 		ctrl_row = QHBoxLayout()
 		self.slider_turret_pitch = QSlider(Qt.Horizontal)
@@ -996,13 +1096,36 @@ class ControlPanelWindow(QMainWindow):
 		parent_layout.addWidget(turret_group)
 
 		# Connections
+		self.combo_turret_mode.currentIndexChanged.connect(self._on_turret_mode_changed)
+		self.spin_turret_offset.valueChanged.connect(self._on_turret_offset_changed)
+		self.chk_auto_fire.toggled.connect(self._on_auto_fire_changed)
 		self.slider_turret_pitch.valueChanged.connect(self._on_turret_slider_changed)
 		self.slider_turret_pitch.sliderReleased.connect(self._on_turret_slider_released)
 		self.spin_turret_pitch.valueChanged.connect(self._on_turret_spin_changed)
 		self.btn_fire_net.clicked.connect(self._on_fire_net)
 		self.btn_clear_nets.clicked.connect(self._on_clear_nets)
 
+	def _on_turret_mode_changed(self, idx):
+		if hasattr(self, "mav_worker") and self.mav_worker is not None:
+			self.mav_worker.set_param("INT_TRT_MODE", idx, is_int=True)
+		is_auto = (idx == 1)
+		self.slider_turret_pitch.setEnabled(not is_auto)
+		self.spin_turret_pitch.setEnabled(not is_auto)
+		self.spin_turret_offset.setEnabled(is_auto)
+
+	def _on_turret_offset_changed(self, val):
+		if hasattr(self, "mav_worker") and self.mav_worker is not None:
+			self.mav_worker.set_param("INT_TRT_OFFSET", float(val))
+
+	def _on_auto_fire_changed(self, checked):
+		val = 1 if checked else 0
+		if hasattr(self, "mav_worker") and self.mav_worker is not None:
+			self.mav_worker.set_param("INT_AUTO_FIRE", val, is_int=True)
+
 	def _on_fire_net(self):
+		if hasattr(self, "mav_worker") and self.mav_worker is not None:
+			self.mav_worker.set_param("INT_TRIGGER", 1, is_int=True)
+
 		def _worker():
 			try:
 				url = "http://127.0.0.1:8003/fire"
@@ -1428,12 +1551,20 @@ class ControlPanelWindow(QMainWindow):
 			self.table_params.setItem(row, 0, item_name)
 
 			# Col 1: Editor widget
-			is_bool = (meta.get("type") == "boolean")
+			ptype = meta.get("type", "float")
+			is_bool = (ptype == "boolean")
+			is_int = (ptype in ("int32", "int"))
 			if is_bool:
 				editor = QComboBox()
 				editor.addItem("0 (Disabled)")
 				editor.addItem("1 (Enabled)")
 				editor.setCurrentIndex(1 if int(meta.get("default", 1)) == 1 else 0)
+			elif is_int:
+				editor = QSpinBox()
+				min_v = int(meta.get("min", -999)) if meta.get("min") is not None else -9999
+				max_v = int(meta.get("max", 999)) if meta.get("max") is not None else 9999
+				editor.setRange(min_v, max_v)
+				editor.setValue(int(meta.get("default", 0)))
 			else:
 				editor = QDoubleSpinBox()
 				editor.setDecimals(meta.get("decimal", 2))
@@ -2146,13 +2277,17 @@ class ControlPanelWindow(QMainWindow):
 		for name, meta in self.param_metadata.items():
 			if name not in self.param_editors:
 				continue
-			is_bool = (meta.get("type") == "boolean")
+			ptype = meta.get("type", "float")
+			is_bool = (ptype == "boolean")
+			is_int = (ptype in ("int32", "int"))
 			editor = self.param_editors[name]
 			if is_bool:
 				val = 1.0 if editor.currentIndex() == 1 else 0.0
+			elif is_int:
+				val = int(editor.value())
 			else:
 				val = float(editor.value())
-			self.mav_worker.set_param(name, val, is_int=is_bool)
+			self.mav_worker.set_param(name, val, is_int=(is_bool or is_int))
 			count += 1
 		if not self.drone_armed:
 			self.mav_worker.save_params_to_storage()
@@ -2165,10 +2300,14 @@ class ControlPanelWindow(QMainWindow):
 			if name not in self.param_editors:
 				continue
 			default_val = meta.get("default", 0)
-			is_bool = (meta.get("type") == "boolean")
+			ptype = meta.get("type", "float")
+			is_bool = (ptype == "boolean")
+			is_int = (ptype in ("int32", "int"))
 			editor = self.param_editors[name]
 			if is_bool:
 				editor.setCurrentIndex(1 if int(default_val) == 1 else 0)
+			elif is_int:
+				editor.setValue(int(default_val))
 			else:
 				editor.setValue(float(default_val))
 		self.lbl_param_status.setText("Values reset to defaults. Click 'Save' to apply to PX4.")
@@ -2178,13 +2317,17 @@ class ControlPanelWindow(QMainWindow):
 			return
 		self.px4_param_values[name] = val
 		meta = self.param_metadata[name]
-		is_bool = (meta.get("type") == "boolean")
+		ptype_meta = meta.get("type", "float")
+		is_bool = (ptype_meta == "boolean")
+		is_int = (ptype_meta in ("int32", "int"))
 
 		# Update the PX4 Value column
 		if name in self.param_px4_items:
 			item = self.param_px4_items[name]
 			if is_bool:
 				text = "1 (Enabled)" if int(val) == 1 else "0 (Disabled)"
+			elif is_int:
+				text = f"{int(val)}"
 			else:
 				dec = meta.get("decimal", 2)
 				text = f"{val:.{dec}f}"
@@ -2195,14 +2338,14 @@ class ControlPanelWindow(QMainWindow):
 		if name in self.param_editors:
 			editor = self.param_editors[name]
 			if not editor.hasFocus():
+				editor.blockSignals(True)
 				if is_bool:
-					editor.blockSignals(True)
 					editor.setCurrentIndex(1 if int(val) == 1 else 0)
-					editor.blockSignals(False)
+				elif is_int:
+					editor.setValue(int(val))
 				else:
-					editor.blockSignals(True)
-					editor.setValue(val)
-					editor.blockSignals(False)
+					editor.setValue(float(val))
+				editor.blockSignals(False)
 
 		if name == "INT_TURRET_PITCH":
 			deg = float(val)
@@ -2216,6 +2359,27 @@ class ControlPanelWindow(QMainWindow):
 				self.slider_turret_pitch.blockSignals(False)
 			if hasattr(self, "lbl_turret_val"):
 				self.lbl_turret_val.setText(f"{deg:.1f}°")
+
+		if name == "INT_TRT_MODE" and hasattr(self, "combo_turret_mode"):
+			self.combo_turret_mode.blockSignals(True)
+			self.combo_turret_mode.setCurrentIndex(1 if int(val) == 1 else 0)
+			self.combo_turret_mode.blockSignals(False)
+			is_auto = (int(val) == 1)
+			self.slider_turret_pitch.setEnabled(not is_auto)
+			self.spin_turret_pitch.setEnabled(not is_auto)
+			if hasattr(self, "spin_turret_offset"):
+				self.spin_turret_offset.setEnabled(is_auto)
+
+		if name == "INT_TRT_OFFSET" and hasattr(self, "spin_turret_offset"):
+			if not self.spin_turret_offset.hasFocus():
+				self.spin_turret_offset.blockSignals(True)
+				self.spin_turret_offset.setValue(float(val))
+				self.spin_turret_offset.blockSignals(False)
+
+		if name == "INT_AUTO_FIRE" and hasattr(self, "chk_auto_fire"):
+			self.chk_auto_fire.blockSignals(True)
+			self.chk_auto_fire.setChecked(int(val) == 1)
+			self.chk_auto_fire.blockSignals(False)
 
 		if hasattr(self, "lbl_param_status"):
 			self.lbl_param_status.setText(f"'{name}' = {val} updated from PX4.")

@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2026 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2026 Hamidiye Savunma Teknolojileri. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -12,7 +12,7 @@
  *    notice, this list of conditions and the following disclaimer in
  *    the documentation and/or other materials provided with the
  *    distribution.
- * 3. Neither the name PX4 nor the names of its contributors may be
+ * 3. Neither the name Hamidiye Savunma Teknolojileri nor the names of its contributors may be
  *    used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -207,6 +207,7 @@ void Intercept::ResetGuidanceState()
 	_last_visual_dist = -1.f;
 	_filt_visual_closing_speed = 0.f;
 	_target_speed_est = 25.f;
+	_payload_controller.reset();
 }
 
 void Intercept::PublishTrajectorySetpoint(const matrix::Vector3f &vel_cmd, float yaw_cmd)
@@ -680,10 +681,7 @@ void Intercept::Run()
 		updateParams();
 	}
 
-	// 2. Turret / Net Gun elevation control (runs on EVERY 50 Hz tick unconditionally)
-	UpdateTurretControl();
-
-	// 3. Register flight mode with Commander
+	// 2. Register flight mode with Commander
 	if (!_sent_mode_registration) {
 		RegisterFlightMode();
 		_sent_mode_registration = true;
@@ -716,7 +714,47 @@ void Intercept::Run()
 		_is_active = (vehicle_status.nav_state == _mode_id) && _param_int_enable.get();
 	}
 
-	// 7. Mode execution
+	// 7. Update payload controller (turret, gimbal, trigger servos) on every 50 Hz tick
+	const hrt_abstime now = hrt_absolute_time();
+	static hrt_abstime last_payload_time = 0;
+	float dt_payload = 0.02f;
+	if (last_payload_time != 0) {
+		dt_payload = math::constrain((float)(now - last_payload_time) * 1e-6f, 0.005f, 0.1f);
+	}
+	last_payload_time = now;
+
+	float current_dist = 0.0f;
+	if (_visual_contact && _visual_range > 0.1f) {
+		current_dist = _visual_range;
+	} else if (_target_pos_valid) {
+		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+		const matrix::Vector3f rel_pos = _target_pos - self_pos;
+		current_dist = rel_pos.norm();
+	}
+
+	float los_pitch_deg = 0.0f;
+	bool has_target_los = false;
+
+	if (_target_pos_valid) {
+		const matrix::Vector3f self_pos(_local_pos.x, _local_pos.y, _local_pos.z);
+		const matrix::Vector3f rel_ned = _target_pos - self_pos;
+		if (rel_ned.norm() > 0.5f) {
+			const matrix::Dcmf R_nb(matrix::Quatf(_vehicle_attitude.q));
+			const matrix::Vector3f rel_body = R_nb.transpose() * rel_ned;
+			// rel_body(0) is X_FRD (+X_FLU), rel_body(2) is Z_FRD (-Z_FLU, tail)
+			// Seeker nose camera points along +Z_FLU (-Z_FRD)
+			los_pitch_deg = math::degrees(atan2f(rel_body(0), -rel_body(2)));
+			has_target_los = true;
+		}
+	}
+
+	const float visual_norm_y = _visual_contact ? (_target_detection.bbox[1] - 0.5f) : 0.0f;
+	const bool is_armed = (vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED);
+
+	_payload_controller.update(dt_payload, _is_active, is_armed, current_dist,
+				   _visual_contact, visual_norm_y, has_target_los, los_pitch_deg);
+
+	// 8. Mode execution
 	if (_is_active) {
 		if (!_was_active) {
 			PX4_INFO("Intercept mode activated: pursuing target");
@@ -812,27 +850,6 @@ void Intercept::Run()
 	}
 }
 
-void Intercept::UpdateTurretControl()
-{
-	// 1. Read commanded pitch from parameter (0.0 to 45.0 degrees)
-	const float target_pitch_deg = math::constrain(_param_int_turret_pitch.get(), 0.0f, 45.0f);
-
-	// 2. Autonomous flight mode hook: In CLOSE_PURSUIT terminal pursuit,
-	// future logic can dynamically lead the target elevation. In manual/standby mode,
-	// it follows the commanded parameter set by the Ground Control Panel.
-	_turret_pitch_deg = target_pitch_deg;
-
-	// 3. Publish to actuator_servos for Servo 1
-	// Output range [-1.0, 1.0]: -1.0 corresponds to 0 deg, +1.0 corresponds to 45 deg
-	actuator_servos_s servos{};
-	servos.timestamp = hrt_absolute_time();
-	servos.timestamp_sample = servos.timestamp;
-	const float norm_cmd = (_turret_pitch_deg / 45.0f) * 2.0f - 1.0f;
-	servos.control[0] = math::constrain(norm_cmd, -1.0f, 1.0f);
-
-	_actuator_servos_pub.publish(servos);
-}
-
 int Intercept::print_status()
 {
 	PX4_INFO("Running: %s", is_running() ? "yes" : "no");
@@ -864,8 +881,10 @@ int Intercept::print_status()
 	PX4_INFO("Guidance state: %s", (_guidance_state == GuidanceState::CLOSE_PURSUIT) ? "CLOSE_PURSUIT (IBVS Visual Servoing)" : "APPROACH (Midcourse GPS)");
 	PX4_INFO("Speed setpoint: %.1f m/s, accel_cmd: %.2f m/s^2, closing rate: %.1f m/s",
 		 (double)_fwd_speed_cmd, (double)_fwd_accel_cmd, (double)_filt_closing_speed);
-	PX4_INFO("Turret pitch: %.1f deg (cmd norm: %.2f)",
-		 (double)_turret_pitch_deg, (double)((_turret_pitch_deg / 45.0f) * 2.0f - 1.0f));
+	PX4_INFO("Turret pitch: %.1f deg, Gimbal pitch: %.1f deg, Trigger: %s",
+		 (double)_payload_controller.getTurretPitchDeg(),
+		 (double)_payload_controller.getGimbalPitchDeg(),
+		 _payload_controller.isTriggerActive() ? "FIRED" : "SAFE");
 
 	if (_visual_contact) {
 		PX4_INFO("Visual contact: YES (range: %.1f m, bbox: [%.2f, %.2f, %.2f, %.2f])",

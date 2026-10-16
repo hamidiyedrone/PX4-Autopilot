@@ -635,7 +635,7 @@ def sdf(g):
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_pitch_joint</joint_name>
-      <sub_topic>command/seeker_pitch</sub_topic>
+      <sub_topic>servo_0</sub_topic>
       <p_gain>{p_gain}</p_gain>
       <i_gain>{i_gain}</i_gain>
       <d_gain>{d_gain}</d_gain>
@@ -707,10 +707,10 @@ def sdf(g):
     </joint>"""
 
 		turret_plugins = f"""
-    <!-- Net Gun Turret Joint Position Controller (subscribes to servo_0) -->
+    <!-- Net Gun Turret Joint Position Controller (subscribes to servo_1) -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>turret_pitch_joint</joint_name>
-      <sub_topic>servo_0</sub_topic>
+      <sub_topic>servo_1</sub_topic>
       <p_gain>{t_p_gain}</p_gain>
       <i_gain>{t_i_gain}</i_gain>
       <d_gain>{t_d_gain}</d_gain>
@@ -880,10 +880,18 @@ param set-default MNT_RANGE_PITCH {gimbal.get("pitch_limit_deg", 45):.1f}
 # Enable prearmed mode so non-throttling actuators (turret servo) respond while disarmed
 param set COM_PREARM_MODE 2
 
-# 1-axis net gun turret on Servo 1 (0 to +{turret.get("pitch_max_deg", 45):.0f} deg forward tilt)
+# 3 Actuator Servos: Gimbal Pitch (Servo 1), Turret Pitch (Servo 2), Net Trigger (Servo 3)
 param set SIM_GZ_SV_FUNC1 201
-param set SIM_GZ_SV_MINA1 {turret.get("pitch_min_deg", 0.0):.1f}
-param set SIM_GZ_SV_MAXA1 {turret.get("pitch_max_deg", 45.0):.1f}
+param set SIM_GZ_SV_MINA1 {-float(gimbal.get("pitch_limit_deg", 60.0)):.1f}
+param set SIM_GZ_SV_MAXA1 {float(gimbal.get("pitch_limit_deg", 60.0)):.1f}
+
+param set SIM_GZ_SV_FUNC2 202
+param set SIM_GZ_SV_MINA2 {turret.get("pitch_min_deg", 0.0):.1f}
+param set SIM_GZ_SV_MAXA2 {turret.get("pitch_max_deg", 45.0):.1f}
+
+param set SIM_GZ_SV_FUNC3 203
+param set SIM_GZ_SV_MINA3 0.0
+param set SIM_GZ_SV_MAXA3 90.0
 """
 
 	body = "\n".join(lines)

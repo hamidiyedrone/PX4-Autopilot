@@ -557,7 +557,7 @@
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_pitch_joint</joint_name>
-      <sub_topic>command/seeker_pitch</sub_topic>
+      <sub_topic>servo_0</sub_topic>
       <p_gain>6.0</p_gain>
       <i_gain>0.8</i_gain>
       <d_gain>0.08</d_gain>
@@ -567,10 +567,10 @@
       <cmd_min>-2.0</cmd_min>
     </plugin>
 
-    <!-- Net Gun Turret Joint Position Controller (subscribes to servo_0) -->
+    <!-- Net Gun Turret Joint Position Controller (subscribes to servo_1) -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>turret_pitch_joint</joint_name>
-      <sub_topic>servo_0</sub_topic>
+      <sub_topic>servo_1</sub_topic>
       <p_gain>8.0</p_gain>
       <i_gain>0.5</i_gain>
       <d_gain>0.1</d_gain>

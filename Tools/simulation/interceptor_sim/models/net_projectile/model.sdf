@@ -1,0 +1,248 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="net_projectile">
+    <pose>0 0 0 0 0 0</pose>
+
+    <!-- Central Hub (20g) -->
+    <link name="hub">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.020</mass>
+        <inertia>
+          <ixx>0.0001</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0001</iyy><iyz>0</iyz><izz>0.0001</izz>
+        </inertia>
+      </inertial>
+      <visual name="hub_visual">
+        <geometry><sphere><radius>0.025</radius></sphere></geometry>
+        <material>
+          <ambient>0.2 0.2 0.22 1</ambient>
+          <diffuse>0.2 0.2 0.22 1</diffuse>
+          <specular>0.4 0.4 0.4 1</specular>
+        </material>
+      </visual>
+      <collision name="hub_collision">
+        <geometry><sphere><radius>0.025</radius></sphere></geometry>
+      </collision>
+    </link>
+
+    <!-- 6 Corner Weights (10g each, 60g total), connected via radial prismatic joints -->
+    <!-- Corner 0: 0 deg (Along +X) -->
+    <link name="corner_0">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_0_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_0" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_0</child>
+      <axis>
+        <xyz>1.0 0.0 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Corner 1: 60 deg -->
+    <link name="corner_1">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_1_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_1" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_1</child>
+      <axis>
+        <xyz>0.5 0.866025 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Corner 2: 120 deg -->
+    <link name="corner_2">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_2_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_2" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_2</child>
+      <axis>
+        <xyz>-0.5 0.866025 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Corner 3: 180 deg (Along -X) -->
+    <link name="corner_3">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_3_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_3" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_3</child>
+      <axis>
+        <xyz>-1.0 0.0 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Corner 4: 240 deg -->
+    <link name="corner_4">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_4_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_4" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_4</child>
+      <axis>
+        <xyz>-0.5 -0.866025 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Corner 5: 300 deg -->
+    <link name="corner_5">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.010</mass>
+        <inertia>
+          <ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz>
+        </inertia>
+      </inertial>
+      <visual name="corner_5_visual">
+        <geometry><sphere><radius>0.028</radius></sphere></geometry>
+        <material>
+          <ambient>1.0 0.35 0.05 1</ambient>
+          <diffuse>1.0 0.35 0.05 1</diffuse>
+          <emissive>0.3 0.1 0.0 1</emissive>
+        </material>
+      </visual>
+    </link>
+    <joint name="radial_joint_5" type="prismatic">
+      <parent>hub</parent>
+      <child>corner_5</child>
+      <axis>
+        <xyz>0.5 -0.866025 0</xyz>
+        <limit><lower>0.000</lower><upper>1.550</upper></limit>
+        <dynamics><damping>0.05</damping></dynamics>
+      </axis>
+    </joint>
+
+    <!-- Forward Velocity Controller -->
+    <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+      <link_name>hub</link_name>
+      <sub_topic>cmd_vel</sub_topic>
+    </plugin>
+
+    <!-- Radial Deployment Controllers for 6 Corners -->
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_0</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_1</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_2</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_3</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_4</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>radial_joint_5</joint_name>
+      <sub_topic>command/deploy_radius</sub_topic>
+      <p_gain>60.0</p_gain>
+      <d_gain>1.5</d_gain>
+    </plugin>
+  </model>
+</sdf>

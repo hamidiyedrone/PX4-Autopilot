@@ -265,6 +265,24 @@ parameters:
             unit: deg
             decimal: 1
 
+        INT_GMB_KP:
+            description:
+                short: Gimbal pitch PI tracking controller proportional gain
+            type: float
+            default: 60.0
+            min: 0.0
+            max: 200.0
+            decimal: 1
+
+        INT_GMB_KI:
+            description:
+                short: Gimbal pitch PI tracking controller integral gain
+            type: float
+            default: 10.0
+            min: 0.0
+            max: 50.0
+            decimal: 1
+
         INT_TRT_MODE:
             description:
                 short: Turret control mode (0=Manual, 1=Auto-Aim)
@@ -272,6 +290,17 @@ parameters:
             default: 0
             min: 0
             max: 1
+
+        INT_TRT_OFFSET:
+            description:
+                short: Turret pitch offset relative to gimbal pitch angle
+                long: Angular offset in degrees added directly to gimbal pitch to determine turret aim angle (+/- deg).
+            type: float
+            default: 0.0
+            min: -45.0
+            max: 45.0
+            unit: deg
+            decimal: 1
 
         INT_AUTO_FIRE:
             description:

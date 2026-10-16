@@ -393,22 +393,40 @@ def main():
         pub_gimbal_pitch = None
         yaw_limit = pitch_limit = 0.0
 
-    # Turret pitch topic sync
+    # Turret pitch topic sync (Servo 2 -> servo_1)
     pub_turret = node.advertise(f"/model/{a.interceptor}/command/turret_pitch", Double)
-    pub_servo0 = node.advertise(f"/model/{a.interceptor}/servo_0", Double)
+    pub_servo1 = node.advertise(f"/model/{a.interceptor}/servo_1", Double)
     last_turret_angle = [-999.0]
 
     def on_cmd_turret_pitch(msg):
         if abs(msg.data - last_turret_angle[0]) > 1e-4:
             last_turret_angle[0] = msg.data
-            pub_servo0.publish(msg)
+            pub_servo1.publish(msg)
 
-    def on_servo0(msg):
+    def on_servo1(msg):
         if abs(msg.data - last_turret_angle[0]) > 1e-4:
             last_turret_angle[0] = msg.data
             pub_turret.publish(msg)
 
     node.subscribe(Double, f"/model/{a.interceptor}/command/turret_pitch", on_cmd_turret_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/servo_1", on_servo1)
+
+    # Seeker gimbal pitch topic sync (Servo 1 -> servo_0)
+    pub_gimbal_sync = node.advertise(f"/model/{a.interceptor}/command/seeker_pitch", Double)
+    pub_servo0 = node.advertise(f"/model/{a.interceptor}/servo_0", Double)
+    last_gimbal_angle = [0.0]
+
+    def on_cmd_seeker_pitch(msg):
+        if abs(msg.data - last_gimbal_angle[0]) > 1e-4:
+            last_gimbal_angle[0] = msg.data
+            pub_servo0.publish(msg)
+
+    def on_servo0(msg):
+        if abs(msg.data - last_gimbal_angle[0]) > 1e-4:
+            last_gimbal_angle[0] = msg.data
+            pub_gimbal_sync.publish(msg)
+
+    node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_cmd_seeker_pitch)
     node.subscribe(Double, f"/model/{a.interceptor}/servo_0", on_servo0)
 
     # Camera image subscription (frame-driven detection)
@@ -554,31 +572,15 @@ def main():
         d_tgt_body = R_int.T @ d_tgt_world  # FLU (+x fwd, +y left, +z up nose)
         dist_tgt = float(np.linalg.norm(d_tgt_body))
 
-        # Kinematic Seeker Gimbal: Pitch-Only Active Tracking (Yaw locked to 0 boresight)
-        if gimbal_enabled and pub_gimbal_yaw is not None and pub_gimbal_pitch is not None:
-            # 1. Yaw axis locked firmly to 0 boresight (azimuth handled by drone heading)
-            msg_y = Double()
-            msg_y.data = 0.0
-            pub_gimbal_yaw.publish(msg_y)
+        # Seeker Gimbal: Pitch angle controlled by PX4 Servo 1 (servo_0)
+        if gimbal_enabled:
+            if pub_gimbal_yaw is not None:
+                msg_y = Double()
+                msg_y.data = 0.0
+                pub_gimbal_yaw.publish(msg_y)
 
-            # 2. Pitch axis active tracking: points camera optical axis directly at target in body elevation plane
-            if dist_tgt > 0.5:
-                theta_desired = float(np.clip(math.atan2(d_tgt_body[0], d_tgt_body[2]), -pitch_limit, pitch_limit))
-            else:
-                # Target lost: smoothly return to neutral 0 boresight
-                theta_desired = 0.0
-
-            # Enforce physical maximum angular velocity (slew-rate limiter <= 90 deg/s)
-            max_delta = max_rate_rad * dt_step
-            d_theta = float(np.clip(theta_desired - gmb_theta, -max_delta, max_delta))
-
-            # Exponential low-pass smoothing (critically damped servo response, tau ~ 0.06s)
-            alpha = 1.0 - math.exp(-dt_step / 0.06)
-            gmb_theta += d_theta * (0.4 + 0.6 * alpha)
-
-            msg_p = Double()
-            msg_p.data = gmb_theta
-            pub_gimbal_pitch.publish(msg_p)
+            # Pitch angle is driven directly by PX4 actuator servo 1 via servo_0
+            gmb_theta = last_gimbal_angle[0]
 
         # camera pose in world (strictly at drone nose, oriented by pitch gimbal angle)
         p_cam_world = p_nose_world

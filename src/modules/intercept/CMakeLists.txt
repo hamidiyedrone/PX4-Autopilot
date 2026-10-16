@@ -4,6 +4,8 @@ px4_add_module(
 	SRCS
 		Intercept.cpp
 		Intercept.hpp
+		PayloadController.cpp
+		PayloadController.hpp
 	MODULE_CONFIG
 		module.yaml
 	DEPENDS
