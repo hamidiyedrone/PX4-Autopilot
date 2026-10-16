@@ -1,0 +1,13 @@
+#
+# Post-start script for Octopus Interceptor
+#
+
+# Vision computer: on a serial port when TGV_CFG is set (started by the serial config),
+# otherwise over UDP on boards with Ethernet (HITL: sim_detector.py --host <board IP>)
+if param compare TGV_CFG 0
+then
+	target_vision start -u 15600
+fi
+
+# Start intercept module
+intercept start

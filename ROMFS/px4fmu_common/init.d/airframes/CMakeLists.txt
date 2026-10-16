@@ -69,6 +69,8 @@ if(CONFIG_MODULES_MC_RATE_CONTROL)
 		4020_holybro_px4vision_v1_5
 		4041_beta75x
 		4050_generic_250
+		4051_interceptor
+		4051_interceptor.post
 		4052_holybro_qav250
 		4053_holybro_kopis2
 		4061_atl_mantis_edu
