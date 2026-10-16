@@ -189,3 +189,133 @@ parameters:
             min: 0.0
             max: 1.5
             decimal: 2
+
+        INT_TURRET_PITCH:
+            description:
+                short: Net gun turret pitch elevation angle
+                long: Net launcher turret elevation angle in degrees.
+            type: float
+            default: 0.0
+            min: 0.0
+            max: 90.0
+            unit: deg
+            decimal: 1
+
+        INT_GMB_SERVO:
+            description:
+                short: Gimbal pitch servo output index (1-8, 0=disabled)
+            type: int32
+            default: 1
+            min: 0
+            max: 8
+
+        INT_TRT_SERVO:
+            description:
+                short: Turret pitch servo output index (1-8, 0=disabled)
+            type: int32
+            default: 2
+            min: 0
+            max: 8
+
+        INT_TRG_SERVO:
+            description:
+                short: Net trigger servo output index (1-8, 0=disabled)
+            type: int32
+            default: 3
+            min: 0
+            max: 8
+
+        INT_TRT_MIN_P:
+            description:
+                short: Turret minimum pitch angle
+            type: float
+            default: 0.0
+            min: -30.0
+            max: 90.0
+            unit: deg
+            decimal: 1
+
+        INT_TRT_MAX_P:
+            description:
+                short: Turret maximum pitch angle
+            type: float
+            default: 45.0
+            min: 0.0
+            max: 90.0
+            unit: deg
+            decimal: 1
+
+        INT_GMB_MIN_P:
+            description:
+                short: Gimbal minimum pitch angle
+            type: float
+            default: -60.0
+            min: -90.0
+            max: 0.0
+            unit: deg
+            decimal: 1
+
+        INT_GMB_MAX_P:
+            description:
+                short: Gimbal maximum pitch angle
+            type: float
+            default: 60.0
+            min: 0.0
+            max: 90.0
+            unit: deg
+            decimal: 1
+
+        INT_TRT_MODE:
+            description:
+                short: Turret control mode (0=Manual, 1=Auto-Aim)
+            type: int32
+            default: 0
+            min: 0
+            max: 1
+
+        INT_AUTO_FIRE:
+            description:
+                short: Auto-fire net when in range and aimed (0=Off, 1=On)
+            type: int32
+            default: 0
+            min: 0
+            max: 1
+
+        INT_FIRE_DIST:
+            description:
+                short: Auto-fire effective distance threshold
+            type: float
+            default: 20.0
+            min: 5.0
+            max: 40.0
+            unit: m
+            decimal: 1
+
+        INT_FIRE_TOL:
+            description:
+                short: Auto-fire angular aim tolerance
+            type: float
+            default: 3.0
+            min: 0.5
+            max: 15.0
+            unit: deg
+            decimal: 1
+
+        INT_TRG_PULSE:
+            description:
+                short: Net trigger servo pulse duration before auto-reset to safe
+            type: float
+            default: 0.5
+            min: 0.1
+            max: 3.0
+            unit: s
+            decimal: 2
+
+        INT_TRIGGER:
+            description:
+                short: Manual trigger command parameter (1=Fire net)
+            type: int32
+            default: 0
+            min: 0
+            max: 1
+

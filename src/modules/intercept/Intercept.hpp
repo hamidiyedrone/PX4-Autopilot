@@ -41,9 +41,11 @@
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionInterval.hpp>
+#include <uORB/topics/actuator_servos.h>
 #include <uORB/topics/arming_check_reply.h>
 #include <uORB/topics/arming_check_request.h>
 #include <uORB/topics/follow_target.h>
+#include <uORB/topics/mount_orientation.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/register_ext_component_reply.h>
 #include <uORB/topics/register_ext_component_request.h>
@@ -96,6 +98,7 @@ private:
 	void ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 	void ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
 	void ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, float &yaw_cmd);
+	void UpdateTurretControl();
 
 	// Subscriptions
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -112,6 +115,10 @@ private:
 	uORB::Publication<unregister_ext_component_s> _unregister_ext_component_pub{ORB_ID(unregister_ext_component)};
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
+	uORB::Publication<actuator_servos_s> _actuator_servos_pub{ORB_ID(actuator_servos)};
+
+	// Turret state
+	float _turret_pitch_deg{0.f};
 
 	// Registration state
 	bool _sent_mode_registration{false};
@@ -189,6 +196,7 @@ private:
 		(ParamFloat<px4::params::INT_TRM_ACC_Z>) _param_int_trm_acc_z,
 		(ParamFloat<px4::params::INT_TRM_YAWRATE>) _param_int_trm_yawrate,
 		(ParamFloat<px4::params::INT_TRM_TC_GAIN>) _param_int_trm_tc_gain,
+		(ParamFloat<px4::params::INT_TURRET_PITCH>) _param_int_turret_pitch,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max
 	)

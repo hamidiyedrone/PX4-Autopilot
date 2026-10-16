@@ -680,7 +680,10 @@ void Intercept::Run()
 		updateParams();
 	}
 
-	// 2. Register flight mode with Commander
+	// 2. Turret / Net Gun elevation control (runs on EVERY 50 Hz tick unconditionally)
+	UpdateTurretControl();
+
+	// 3. Register flight mode with Commander
 	if (!_sent_mode_registration) {
 		RegisterFlightMode();
 		_sent_mode_registration = true;
@@ -809,6 +812,27 @@ void Intercept::Run()
 	}
 }
 
+void Intercept::UpdateTurretControl()
+{
+	// 1. Read commanded pitch from parameter (0.0 to 45.0 degrees)
+	const float target_pitch_deg = math::constrain(_param_int_turret_pitch.get(), 0.0f, 45.0f);
+
+	// 2. Autonomous flight mode hook: In CLOSE_PURSUIT terminal pursuit,
+	// future logic can dynamically lead the target elevation. In manual/standby mode,
+	// it follows the commanded parameter set by the Ground Control Panel.
+	_turret_pitch_deg = target_pitch_deg;
+
+	// 3. Publish to actuator_servos for Servo 1
+	// Output range [-1.0, 1.0]: -1.0 corresponds to 0 deg, +1.0 corresponds to 45 deg
+	actuator_servos_s servos{};
+	servos.timestamp = hrt_absolute_time();
+	servos.timestamp_sample = servos.timestamp;
+	const float norm_cmd = (_turret_pitch_deg / 45.0f) * 2.0f - 1.0f;
+	servos.control[0] = math::constrain(norm_cmd, -1.0f, 1.0f);
+
+	_actuator_servos_pub.publish(servos);
+}
+
 int Intercept::print_status()
 {
 	PX4_INFO("Running: %s", is_running() ? "yes" : "no");
@@ -840,6 +864,8 @@ int Intercept::print_status()
 	PX4_INFO("Guidance state: %s", (_guidance_state == GuidanceState::CLOSE_PURSUIT) ? "CLOSE_PURSUIT (IBVS Visual Servoing)" : "APPROACH (Midcourse GPS)");
 	PX4_INFO("Speed setpoint: %.1f m/s, accel_cmd: %.2f m/s^2, closing rate: %.1f m/s",
 		 (double)_fwd_speed_cmd, (double)_fwd_accel_cmd, (double)_filt_closing_speed);
+	PX4_INFO("Turret pitch: %.1f deg (cmd norm: %.2f)",
+		 (double)_turret_pitch_deg, (double)((_turret_pitch_deg / 45.0f) * 2.0f - 1.0f));
 
 	if (_visual_contact) {
 		PX4_INFO("Visual contact: YES (range: %.1f m, bbox: [%.2f, %.2f, %.2f, %.2f])",
