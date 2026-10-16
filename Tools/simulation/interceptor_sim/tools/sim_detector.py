@@ -345,7 +345,7 @@ def main():
         cg_num += comp["mass"] * comp["z"]
     cg_num += cfg["fuselage"]["mass"] * fus_len / 2
     cg = cg_num / total_mass
-    cam_offset_body = np.array([0.0, 0.0, fus_len - cg])  # nose in body FLU (z up)
+    cam_offset_body = np.array([0.0, 0.0, fus_len - cg])  # nose camera in body FLU (z up)
 
     # gz transport
     node = Node()
@@ -385,13 +385,31 @@ def main():
         pub_gimbal_yaw = node.advertise(f"/model/{a.interceptor}/command/seeker_yaw", Double)
         pub_gimbal_pitch = node.advertise(f"/model/{a.interceptor}/command/seeker_pitch", Double)
         yaw_limit = math.radians(gimbal_cfg.get("yaw_limit_deg", 45))
-        pitch_limit = math.radians(gimbal_cfg.get("pitch_limit_deg", 45))
+        pitch_limit = math.radians(gimbal_cfg.get("pitch_limit_deg", 60))
         print(f"sim_detector: 2-axis seeker gimbal active (+/-{math.degrees(yaw_limit):.0f}° yaw, "
               f"+/-{math.degrees(pitch_limit):.0f}° pitch)")
     else:
         pub_gimbal_yaw = None
         pub_gimbal_pitch = None
         yaw_limit = pitch_limit = 0.0
+
+    # Turret pitch topic sync
+    pub_turret = node.advertise(f"/model/{a.interceptor}/command/turret_pitch", Double)
+    pub_servo0 = node.advertise(f"/model/{a.interceptor}/servo_0", Double)
+    last_turret_angle = [-999.0]
+
+    def on_cmd_turret_pitch(msg):
+        if abs(msg.data - last_turret_angle[0]) > 1e-4:
+            last_turret_angle[0] = msg.data
+            pub_servo0.publish(msg)
+
+    def on_servo0(msg):
+        if abs(msg.data - last_turret_angle[0]) > 1e-4:
+            last_turret_angle[0] = msg.data
+            pub_turret.publish(msg)
+
+    node.subscribe(Double, f"/model/{a.interceptor}/command/turret_pitch", on_cmd_turret_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/servo_0", on_servo0)
 
     # Camera image subscription (frame-driven detection)
     frame_queue = queue.Queue(maxsize=1)
@@ -440,7 +458,7 @@ def main():
             break
 
     frame_id = 0
-    fallback_rate = a.rate if a.rate > 0 else float(cam.get("rate", 50.0))
+    fallback_rate = a.rate if a.rate > 0 else float(cam.get("rate", 60.0))
     dt_fallback = 1.0 / fallback_rate
     last_send = 0.0
     last_sim_time = 0.0

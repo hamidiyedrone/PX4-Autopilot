@@ -337,6 +337,7 @@ fi
 
 start_px4() { # instance autostart model_name [px4 options]
 	mkdir -p "${BUILD_DIR}/instance_$1"
+	rm -f "${BUILD_DIR}/instance_$1/parameters.bson" "${BUILD_DIR}/instance_$1/parameters_backup.bson"
 	cd "${BUILD_DIR}/instance_$1"
 	PX4_SYS_AUTOSTART="$2" PX4_GZ_STANDALONE=1 PX4_GZ_WORLD="${WORLD}" PX4_GZ_MODEL_NAME="$3" \
 		"${BUILD_DIR}/bin/px4" -i "$1" "${@:4}" "${BUILD_DIR}/etc"

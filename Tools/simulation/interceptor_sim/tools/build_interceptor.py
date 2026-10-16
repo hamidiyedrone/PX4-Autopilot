@@ -97,16 +97,23 @@ def main():
 	]
 
 	# ---- CG along the fuselage axis (measured from the tail end z=0)
-	# Fixed parts: shell + internal components + tail fins + gimbal
+	# Fixed parts: shell + internal components + tail fins + gimbal + turret
 	z_fin_center = fins["z_from_tail"] + fins["chord"] / 2
 	gimbal = c.get("gimbal", {})
 	gimbal_enabled = gimbal.get("enabled", False)
 	m_gimbal = gimbal.get("mass", 0.120) if gimbal_enabled else 0.0
 	z_gimbal = L - 0.015
 
+	turret = c.get("turret", {})
+	turret_enabled = turret.get("enabled", False)
+	m_turret = turret.get("mass", 0.180) if turret_enabled else 0.0
+	z_turret = L - 0.050
+
 	fixed = [(fus["mass"], L / 2)] + [(p["mass"], p["z"]) for p in c["components"].values()] + [(fins["mass"], z_fin_center)]
 	if m_gimbal > 0:
 		fixed.append((m_gimbal, z_gimbal))
+	if m_turret > 0:
+		fixed.append((m_turret, z_turret))
 
 	m_fixed = sum(m for m, _ in fixed)
 	m_mot = n_mot * mot["mass"]
@@ -128,6 +135,9 @@ def main():
 
 	if m_gimbal > 0:
 		I += parallel_axis(np.diag([1e-5, 1e-5, 1e-5]), m_gimbal, [0, 0, z_gimbal - cg])
+
+	if m_turret > 0:
+		I += parallel_axis(np.diag([1e-4, 1e-4, 1e-4]), m_turret, [0.040, 0, z_turret - cg])
 
 	# 4 Tail fins
 	m_single_fin = fins["mass"] / 4
@@ -219,7 +229,8 @@ def main():
 		   wing_area_total=wing_area_total, wing_pair_area=wing_pair_area,
 		   wing_cla=wing_cla, arm_len=arm_len, r_arm_mid=r_arm_mid,
 		   z_ground_rel_cg=z_ground_rel_cg, spawn_z=spawn_z,
-		   gimbal=gimbal, m_gimbal=m_gimbal)
+		   gimbal=gimbal, m_gimbal=m_gimbal,
+		   turret=turret, m_turret=m_turret)
 
 	with open(os.path.join(model_dir, "model.sdf"), "w") as f:
 		f.write(sdf(geo))
@@ -231,6 +242,19 @@ def main():
 	if os.path.exists(os.path.dirname(BUILD_AIRFRAME)):
 		with open(BUILD_AIRFRAME, "w") as f:
 			f.write(airframe_content)
+
+	hw_airframe = os.path.join(PX4_DIR, "ROMFS", "px4fmu_common", "init.d", "airframes", "4051_interceptor")
+	if os.path.exists(hw_airframe):
+		# Ensure HIL_ACT_FUNC5 is set to 201 (Servo 1 for turret)
+		with open(hw_airframe, "r") as f_hw:
+			hw_txt = f_hw.read()
+		if "HIL_ACT_FUNC5" not in hw_txt:
+			hw_txt = hw_txt.replace(
+				"param set-default HIL_ACT_FUNC4 104",
+				"param set-default HIL_ACT_FUNC4 104\nparam set-default HIL_ACT_FUNC5 201"
+			)
+			with open(hw_airframe, "w") as f_hw:
+				f_hw.write(hw_txt)
 
 	if c.get("camera", {}).get("enabled"):
 		with open(AIRFRAME + ".post", "w") as f:
@@ -293,10 +317,17 @@ def sdf(g):
         <material><ambient>{body_grey}</ambient><diffuse>{body_grey}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>"""
 
-	# Optical seeker turret on nose tip
+	# Optical seeker turret on nose tip (apex at 0, 0, unobstructed)
 	cam_lens_z = fus["length"] - cg
 	gimbal = g.get("gimbal", {})
 	gimbal_enabled = gimbal.get("enabled", False)
+	turret = g.get("turret", {})
+	turret_enabled = turret.get("enabled", False)
+	x_cam = 0.0
+	x_t_pivot = 0.042
+	z_t_pivot = cam_lens_z - 0.110
+	t_barrel_len = 0.095
+	t_barrel_rad = 0.021
 
 	if not gimbal_enabled:
 		vis += f"""
@@ -313,9 +344,18 @@ def sdf(g):
 	else:
 		vis += f"""
       <visual name="gimbal_base_collar_visual">
-        <pose>0 0 {cam_lens_z - 0.020:.4f} 0 0 0</pose>
-        <geometry><cylinder><radius>0.024</radius><length>0.015</length></cylinder></geometry>
-        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
+        <pose>0 0 {cam_lens_z - 0.012:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>0.026</radius><length>0.014</length></cylinder></geometry>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse></material>
+      </visual>"""
+
+	if turret_enabled:
+		vis += f"""
+      <!-- Embedded Turret Mount Bracket inside Nose (+X flank) -->
+      <visual name="turret_mount_bracket_visual">
+        <pose>{x_t_pivot - 0.005:.4f} 0 {z_t_pivot - 0.006:.4f} 0 0 0</pose>
+        <geometry><box><size>0.036 0.048 0.020</size></box></geometry>
+        <material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.12 0.12 0.15 1</diffuse><specular>0.3 0.3 0.3 1</specular></material>
       </visual>"""
 
 	# 4 Tail fins at the rear
@@ -493,15 +533,15 @@ def sdf(g):
 	if gimbal_enabled:
 		m_g = g.get("m_gimbal", 0.12) / 2
 		yaw_lim = math.radians(gimbal.get("yaw_limit_deg", 45))
-		pitch_lim = math.radians(gimbal.get("pitch_limit_deg", 45))
+		pitch_lim = math.radians(gimbal.get("pitch_limit_deg", 60))
 		p_gain = gimbal.get("p_gain", 5.0)
 		i_gain = gimbal.get("i_gain", 0.1)
 		d_gain = gimbal.get("d_gain", 0.05)
 
 		gimbal_sdf = f"""
-    <!-- 2-Axis Gimbal: Yaw Joint & Link (+/- {gimbal.get("yaw_limit_deg", 45)} deg around fuselage z) -->
+    <!-- 2-Axis Optical Seeker: Yaw Joint & Link (+/- {gimbal.get("yaw_limit_deg", 45)} deg around fuselage z) -->
     <link name="gimbal_yaw_link">
-      <pose>0 0 {cam_lens_z - 0.010:.4f} 0 0 0</pose>
+      <pose>{x_cam:.4f} 0 {cam_lens_z - 0.010:.4f} 0 0 0</pose>
       <inertial>
         <mass>{m_g:.4f}</mass>
         <inertia>
@@ -512,7 +552,7 @@ def sdf(g):
       <visual name="gimbal_yaw_yoke_visual">
         <pose>0 0 0 0 0 0</pose>
         <geometry><cylinder><radius>0.022</radius><length>0.016</length></cylinder></geometry>
-        <material><ambient>0.2 0.2 0.22 1</ambient><diffuse>0.2 0.2 0.22 1</diffuse></material>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse></material>
       </visual>
     </link>
 
@@ -536,9 +576,9 @@ def sdf(g):
       </physics>
     </joint>
 
-    <!-- 2-Axis Gimbal: Pitch Joint & Link (+/- {gimbal.get("pitch_limit_deg", 45)} deg around cross y) with Camera -->
+    <!-- 2-Axis Optical Seeker: Pitch Joint & Link (+/- {gimbal.get("pitch_limit_deg", 60)} deg, Seeker Camera) -->
     <link name="gimbal_pitch_link">
-      <pose>0 0 {cam_lens_z:.4f} 0 0 0</pose>
+      <pose>{x_cam:.4f} 0 {cam_lens_z:.4f} 0 0 0</pose>
       <inertial>
         <mass>{m_g:.4f}</mass>
         <inertia>
@@ -546,15 +586,17 @@ def sdf(g):
           <iyy>0.0005</iyy><iyz>0</iyz><izz>0.0005</izz>
         </inertia>
       </inertial>
+      <!-- Seeker Camera Housing (Dark graphite / black) -->
       <visual name="seeker_turret_visual">
         <pose>0 0 -0.010 0 0 0</pose>
         <geometry><sphere><radius>0.020</radius></sphere></geometry>
-        <material><ambient>{accent_dark}</ambient><diffuse>{accent_dark}</diffuse><specular>0.3 0.3 0.3 1</specular></material>
+        <material><ambient>0.14 0.14 0.16 1</ambient><diffuse>0.18 0.18 0.20 1</diffuse><specular>0.4 0.4 0.4 1</specular></material>
       </visual>
+      <!-- Optical Glass Lens -->
       <visual name="camera_lens_visual">
         <pose>0 0 0.005 0 0 0</pose>
         <geometry><cylinder><radius>0.012</radius><length>0.010</length></cylinder></geometry>
-        <material><ambient>0.02 0.02 0.05 1</ambient><diffuse>0.02 0.02 0.05 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
+        <material><ambient>0.02 0.02 0.04 1</ambient><diffuse>0.02 0.02 0.04 1</diffuse><specular>0.95 0.95 0.95 1</specular></material>
       </visual>{camera}
     </link>
 
@@ -579,7 +621,7 @@ def sdf(g):
     </joint>"""
 
 		gimbal_plugins = f"""
-    <!-- 2-Axis Gimbal Joint Position Controllers -->
+    <!-- 2-Axis Optical Seeker Joint Position Controllers -->
     <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_yaw_joint</joint_name>
       <sub_topic>command/seeker_yaw</sub_topic>
@@ -601,6 +643,81 @@ def sdf(g):
       <i_min>-1.0</i_min>
       <cmd_max>2.0</cmd_max>
       <cmd_min>-2.0</cmd_min>
+    </plugin>"""
+
+	turret_sdf = ""
+	turret_plugins = ""
+	if turret_enabled:
+		m_t = g.get("m_turret", 0.18)
+		t_pitch_min = math.radians(turret.get("pitch_min_deg", 0.0))
+		t_pitch_max = math.radians(turret.get("pitch_max_deg", 45.0))
+		t_p_gain = turret.get("p_gain", 8.0)
+		t_i_gain = turret.get("i_gain", 0.5)
+		t_d_gain = turret.get("d_gain", 0.1)
+
+		turret_sdf = f"""
+    <!-- 1-Axis Net Gun Turret: Pitch Joint & Link (0 to +{turret.get("pitch_max_deg", 45):.0f} deg forward tilt, away from camera) -->
+    <link name="turret_pitch_link">
+      <pose>{x_t_pivot:.4f} 0 {z_t_pivot:.4f} 0 0 0</pose>
+      <inertial>
+        <mass>{m_t:.4f}</mass>
+        <inertia>
+          <ixx>0.0006</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0006</iyy><iyz>0</iyz><izz>0.0002</izz>
+        </inertia>
+      </inertial>
+      <!-- Pivot hinge pin / knuckle (Solid uniform matte black) -->
+      <visual name="turret_hinge_visual">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.010</radius><length>0.044</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse><specular>0.2 0.2 0.2 1</specular></material>
+      </visual>
+      <!-- Main Net Canister Barrel (Solid uniform matte black cylinder, embedded in nose) -->
+      <visual name="net_canister_barrel_visual">
+        <pose>0 0 {t_barrel_len / 2:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>{t_barrel_rad:.4f}</radius><length>{t_barrel_len:.4f}</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse><specular>0.2 0.2 0.2 1</specular></material>
+      </visual>
+      <!-- Recessed dark muzzle cavity -->
+      <visual name="net_canister_muzzle_visual">
+        <pose>0 0 {t_barrel_len - 0.002:.4f} 0 0 0</pose>
+        <geometry><cylinder><radius>{t_barrel_rad - 0.003:.4f}</radius><length>0.005</length></cylinder></geometry>
+        <material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.02 0.02 0.02 1</diffuse></material>
+      </visual>
+    </link>
+
+    <joint name="turret_pitch_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>turret_pitch_link</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>{t_pitch_min:.4f}</lower>
+          <upper>{t_pitch_max:.4f}</upper>
+          <effort>5</effort>
+          <velocity>10</velocity>
+        </limit>
+        <dynamics><damping>0.04</damping><friction>0.005</friction></dynamics>
+      </axis>
+      <physics>
+        <ode>
+          <implicit_spring_damper>1</implicit_spring_damper>
+        </ode>
+      </physics>
+    </joint>"""
+
+		turret_plugins = f"""
+    <!-- Net Gun Turret Joint Position Controller (subscribes to servo_0) -->
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>turret_pitch_joint</joint_name>
+      <sub_topic>servo_0</sub_topic>
+      <p_gain>{t_p_gain}</p_gain>
+      <i_gain>{t_i_gain}</i_gain>
+      <d_gain>{t_d_gain}</d_gain>
+      <i_max>1.0</i_max>
+      <i_min>-1.0</i_min>
+      <cmd_max>4.0</cmd_max>
+      <cmd_min>-4.0</cmd_min>
     </plugin>"""
 
 	return f"""<?xml version="1.0"?>
@@ -646,8 +763,10 @@ def sdf(g):
     </link>
 {rotors}
 {gimbal_sdf}
+{turret_sdf}
 {plugins}
 {gimbal_plugins}
+{turret_plugins}
 
     <!-- Wing arms LiftDrag Pair A (45 deg / -135 deg diagonal) -->
     <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
@@ -753,6 +872,18 @@ def airframe(g, thr_hover, w_min):
 param set-default MNT_MODE_OUT 0
 param set-default MNT_RANGE_YAW {gimbal.get("yaw_limit_deg", 45):.1f}
 param set-default MNT_RANGE_PITCH {gimbal.get("pitch_limit_deg", 45):.1f}
+"""
+
+	turret = c.get("turret", {})
+	if turret.get("enabled", False):
+		cam += f"""
+# Enable prearmed mode so non-throttling actuators (turret servo) respond while disarmed
+param set COM_PREARM_MODE 2
+
+# 1-axis net gun turret on Servo 1 (0 to +{turret.get("pitch_max_deg", 45):.0f} deg forward tilt)
+param set SIM_GZ_SV_FUNC1 201
+param set SIM_GZ_SV_MINA1 {turret.get("pitch_min_deg", 0.0):.1f}
+param set SIM_GZ_SV_MAXA1 {turret.get("pitch_max_deg", 45.0):.1f}
 """
 
 	body = "\n".join(lines)
