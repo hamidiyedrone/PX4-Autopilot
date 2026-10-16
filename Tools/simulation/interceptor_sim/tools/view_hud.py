@@ -10,6 +10,7 @@ flight data from PX4 over MAVLink (own link, udp 14551, opened by the airframe .
   - Flight mode, armed state, battery, GPS
   - Target bounding box (from Gazebo ground truth)
   - Center boresight reticle and LOS line
+  - Net turret: hexagon aim mark of the barrel axis (at the target range)
 Values that PX4 has not sent for a while are shown as ---.
 
 Keys: h toggles the flight data, q / Esc quits.
@@ -33,13 +34,18 @@ os.environ["MAVLINK20"] = "1"
 import cv2
 import numpy as np
 
+import json
+
 from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.double_pb2 import Double
 from gz.msgs10.double_v_pb2 import Double_V
 from gz.msgs10.image_pb2 import Image as ImageMsg
 from gz.msgs10.pose_v_pb2 import Pose_V
+from gz.msgs10.stringmsg_pb2 import StringMsg
 from gz.transport13 import Node
 from pymavlink import mavutil
+
+from net_launcher import BARREL_LENGTH, TURRET_PIVOT   # turret geometry in the body frame
 
 # AVAILABLE_MODES is only in the development dialect of pymavlink (same CRC as PX4)
 mavutil.set_dialect("development")
@@ -85,6 +91,8 @@ PX4_MODE_NAMES = {
     (11, 0): "ALTITUDE CRUISE",
 }
 PX4_MODE_NAMES.update({(4, 11 + i): f"EXTERNAL {i + 1}" for i in range(8)})
+
+AIM_RANGE = 20.0    # turret aim mark distance without a target range [m]
 
 GPS_FIX = {0: "NO GPS", 1: "NO FIX", 2: "2D", 3: "3D", 4: "DGPS", 5: "RTK FLT", 6: "RTK FIX"}
 
@@ -442,14 +450,52 @@ def draw_flight_data(img, tel, sim_t, w, h, gmb_data=None, fps=None):
     fps_str = f"FPS {fps:5.1f}" if fps is not None and fps > 0.1 else "FPS   ---"
     hud_text(img, fps_str, (24 * s, 54 * s), 0.5 * s)
 
-    # gimbal pitch relative to forward boresight (top right)
+    # seeker and turret pitch relative to forward boresight (top right)
     gmb_pitch = None
+    turret_pitch = None
     if gmb_data is not None:
         gmb_pitch = gmb_data.get("pitch")
+        turret_pitch = gmb_data.get("turret_pitch")
 
     x_tr = w - 24 * s
     y_tr = 30 * s
-    hud_text(img, "GMB PITCH " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
+    hud_text(img, "SEEKER " + fmt(gmb_pitch, "+6.1f"), (x_tr, y_tr), 0.55 * s, "right")
+    hud_text(img, "TURRET " + fmt(turret_pitch, " 6.1f"), (x_tr, y_tr + 22 * s), 0.55 * s, "right")
+
+
+def draw_turret_aim(img, d, fx, fy, width, height):
+    """Turret aim mark: a hexagon (the net) where the barrel axis points, d = aim point in the
+    camera optical frame. Outside the image it sits on the border with an arrow towards it."""
+    if d is None:
+        return
+
+    cx, cy = width / 2, height / 2
+    size, margin = 9, 28
+
+    if d[2] > 0.1:
+        u, v = cx + fx * d[0] / d[2], cy + fy * d[1] / d[2]
+
+        if margin <= u < width - margin and margin <= v < height - margin:
+            pts = [(u + size * math.cos(math.radians(30 + 60 * i)), v + size * math.sin(math.radians(30 + 60 * i)))
+                   for i in range(6)]
+            for i in range(6):
+                hud_line(img, pts[i], pts[(i + 1) % 6])
+            return
+
+        dx, dy = u - cx, v - cy
+    else:
+        dx, dy = d[0], d[1]       # behind the camera: only the direction
+
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return
+    dx, dy = dx / n, dy / n
+    k = min((cx - margin) / abs(dx) if abs(dx) > 1e-9 else 1e9, (cy - margin) / abs(dy) if abs(dy) > 1e-9 else 1e9)
+    u, v = cx + dx * k, cy + dy * k
+    tip = (u + dx * 10, v + dy * 10)
+    hud_line(img, tip, (u - dy * 7, v + dx * 7))
+    hud_line(img, (u - dy * 7, v + dx * 7), (u + dy * 7, v - dx * 7))
+    hud_line(img, (u + dy * 7, v - dx * 7), tip)
 
 
 def draw_hud(img, tracking_data, width, height):
@@ -519,6 +565,40 @@ def draw_hud(img, tracking_data, width, height):
             hud_text(img, f"{range_m:.1f}m", (u_box_c, v_max + 14), 0.45, "center", color=HUD)
 
 
+def draw_net_projectiles(frame, net_telems, p_cam_world, R_cam_opt_world, fx, fy, cx, cy, width, height):
+    """HUD marks for the nets (the camera renders the net itself, tools/net_launcher.py):
+    rings on the 12 mm corner balls, which are sub-pixel beyond a few metres, and a label."""
+    if not net_telems:
+        return
+
+    def project(p_world):
+        d = R_cam_opt_world @ (np.asarray(p_world, dtype=float) - p_cam_world)
+        if d[2] <= 0.15:
+            return None
+        return int(round(fx * d[0] / d[2] + cx)), int(round(fy * d[1] / d[2] + cy))
+
+    ring_color = (0, 200, 255)
+    for net in net_telems:
+        try:
+            nodes = net.get("nodes")
+            if nodes:
+                for k in net.get("corners", []):
+                    uv = project(nodes[k])
+                    if uv is not None and 0 <= uv[0] < width and 0 <= uv[1] < height:
+                        cv2.circle(frame, uv, 4, (0, 0, 0), 2, cv2.LINE_AA)
+                        cv2.circle(frame, uv, 4, ring_color, 1, cv2.LINE_AA)
+
+            uv = project(net["pos"])
+            if uv is not None and 0 <= uv[0] < width and 0 <= uv[1] < height:
+                label = (f"NET {float(net.get('dist', 0.0)):.1f}m {net.get('phase', '').upper()} "
+                         f"{2.0 * float(net['radius']):.1f}m")
+                org = (uv[0] + 12, max(25, uv[1] - 10))
+                cv2.putText(frame, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                cv2.putText(frame, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45, ring_color, 1, cv2.LINE_AA)
+        except Exception:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--world", default="ankara")
@@ -568,7 +648,7 @@ def main():
 
     node = Node()
     state = {"poses": {}, "t": 0.0, "last_frame": None, "new_frame": False,
-             "gmb_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
+             "gmb_pitch": 0.0, "turret_pitch": 0.0, "det": None, "frame_times": deque(maxlen=30),
              "fps": 0.0, "last_frame_time": 0.0}
 
     def on_clock(msg):
@@ -581,6 +661,9 @@ def main():
 
     def on_gmb_pitch(msg):
         state["gmb_pitch"] = msg.data
+
+    def on_turret_pitch(msg):
+        state["turret_pitch"] = msg.data
 
     def on_detection(msg):
         if len(msg.data) >= 6:
@@ -615,7 +698,16 @@ def main():
     node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
     node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", on_pose)
     node.subscribe(Double, f"/model/{a.interceptor}/command/seeker_pitch", on_gmb_pitch)
+    node.subscribe(Double, f"/model/{a.interceptor}/servo_0", on_turret_pitch)
     node.subscribe(Double_V, f"/model/{a.interceptor}/detection", on_detection)
+
+    def on_net_telem(msg):
+        try:
+            state["net_telems"] = json.loads(msg.data)
+        except Exception:
+            pass
+
+    node.subscribe(StringMsg, "/interceptor/net_telemetry", on_net_telem)
 
     # Discover camera topic (on gimbal_pitch_link or base_link)
     cam_topic = f"/world/{a.world}/model/{a.interceptor}/link/gimbal_pitch_link/sensor/nose_camera/image"
@@ -674,9 +766,11 @@ def main():
             # Gimbal camera orientation from commanded seeker pitch angle (pitch-only tilt)
             pitch_rad = float(state.get("gmb_pitch", 0.0))
             pitch_deg = math.degrees(pitch_rad)
+            turret_pitch_deg = math.degrees(float(state.get("turret_pitch", 0.0)))
 
             gmb_data = {
                 "pitch": pitch_deg,
+                "turret_pitch": turret_pitch_deg,
             }
 
             cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
@@ -784,13 +878,25 @@ def main():
                         v_max = int(np.clip(v_centre + h_px // 2, 0, height - 1))
                         tracking_data["bbox"] = (u_min, v_min, u_max, v_max)
 
+            # turret aim: barrel axis tilted about body +y (as tools/net_launcher.py fires it),
+            # marked at the target range
+            tp = math.radians(turret_pitch_deg)
+            u_barrel = np.array([math.sin(tp), 0.0, math.cos(tp)])
+            muzzle = p_int + R_int @ (TURRET_PIVOT + BARREL_LENGTH * u_barrel)
+            aim_range = tracking_data.get("range_m") or AIM_RANGE
+            tracking_data["turret_aim"] = R_cam_opt_world @ (muzzle + aim_range * (R_int @ u_barrel) - p_cam_world)
+
         # Render HUD onto frame
         h_img, w_img = frame.shape[:2]
 
         if show_flight_data:
             draw_flight_data(frame, tel, state["t"], w_img, h_img, gmb_data, state.get("fps", 0.0))
 
+        if pi is not None:
+            draw_net_projectiles(frame, state.get("net_telems", []), p_cam_world, R_cam_opt_world, fx, fy, cx, cy, width, height)
+
         draw_hud(frame, tracking_data, width, height)
+        draw_turret_aim(frame, tracking_data.get("turret_aim"), fx, fy, width, height)
         cv2.imshow(window_name, frame)
 
     cv2.destroyAllWindows()

@@ -19,6 +19,11 @@ Tab 2: Parameters (INT_*)
 - View default values, min/max allowable ranges, and full documentation from module.yaml
 - Real-time search/filter bar
 
+Tab 4: Net
+- Net and launcher parameters of tools/net_launcher.py (HTTP :8003): applied from the next
+  shot, saved to the net: section of interceptor.yaml on request
+- The net in the air (phase, distance, spread, speed), Fire / Clear
+
 Connects to target_sim.py HTTP API at http://localhost:8000 and to the PX4 GCS link
 (udp 14550) as the ground station, so QGroundControl cannot run at the same time.
 """
@@ -344,6 +349,72 @@ class DetectorWorker(QObject):
 		threading.Thread(target=_worker, daemon=True).start()
 
 
+class NetWorker(QObject):
+	"""Worker to query the net launcher (tools/net_launcher.py) and change its net parameters."""
+
+	status_received = Signal(dict)
+	params_received = Signal(dict)
+	message = Signal(str)
+
+	def __init__(self, host="127.0.0.1", port=8003):
+		super().__init__()
+		self.base_url = f"http://{host}:{port}"
+		self._is_polling = False
+
+	def _request(self, path, body=None, timeout=0.5):
+		data = None if body is None else json.dumps(body).encode("utf-8")
+		req = urllib.request.Request(
+			f"{self.base_url}{path}",
+			data=data,
+			headers={"Content-Type": "application/json", "User-Agent": "ControlPanel/1.0"},
+			method="GET" if body is None else "POST",
+		)
+		with urllib.request.urlopen(req, timeout=timeout) as resp:
+			return json.loads(resp.read().decode("utf-8"))
+
+	def poll(self):
+		if self._is_polling:
+			return
+		self._is_polling = True
+
+		def _worker():
+			try:
+				self.status_received.emit(self._request("/status", timeout=0.3))
+			except Exception:
+				pass
+			finally:
+				self._is_polling = False
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+	def _call(self, path, body, signal, ok_text):
+		def _worker():
+			try:
+				data = self._request(path, body, timeout=1.0)
+				if signal is not None:
+					signal.emit(data)
+				self.message.emit(ok_text)
+			except urllib.error.HTTPError as e:
+				try:
+					err = json.loads(e.read().decode("utf-8")).get("error", str(e))
+				except Exception:
+					err = str(e)
+				self.message.emit(f"Error: {err}")
+			except Exception as e:
+				self.message.emit(f"Net launcher not reachable ({e})")
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+	def fetch_params(self):
+		self._call("/params", None, self.params_received, "Parameters read from the launcher.")
+
+	def send_params(self, values):
+		self._call("/params", values, self.params_received, "Applied: used from the next shot.")
+
+	def save_params(self):
+		self._call("/params/save", {}, None, "Saved to interceptor.yaml (net: section).")
+
+
 class MavlinkWorker(QObject):
 	"""Runs in its own thread: reads the PX4 MAVLink link, handles modes, telemetry and parameters."""
 
@@ -593,6 +664,14 @@ class ControlPanelWindow(QMainWindow):
 		self.worker.telemetry_received.connect(self.on_telemetry)
 		self.detector_worker.noise_received.connect(self.on_detector_noise)
 
+		# Net launcher (tools/net_launcher.py): net parameters and the net in the air
+		self.net_worker = NetWorker(host, 8003)
+		self.net_params_loaded = False
+		self.poll_timer.timeout.connect(self.net_worker.poll)
+		self.net_worker.status_received.connect(self.on_net_status)
+		self.net_worker.params_received.connect(self.on_net_params)
+		self.net_worker.message.connect(lambda text: self.lbl_net_status.setText(text))
+
 		# Directions currently held via D-pad buttons or arrow keys
 		self.held = set()
 		self.hold_timer = QTimer(self)
@@ -785,6 +864,7 @@ class ControlPanelWindow(QMainWindow):
 			telem_layout.addWidget(value, row, col + 1)
 
 		main_layout.addWidget(telem_group)
+		self._init_vision_noise_ui(main_layout)
 		main_layout.addStretch()
 
 		self.tabs.addTab(flight_tab, "Flight Control")
@@ -799,10 +879,15 @@ class ControlPanelWindow(QMainWindow):
 		self._init_autotune_ui(tune_tab)
 		self.tabs.addTab(tune_tab, "Auto-Tune")
 
+		# Tab 4: Net launcher (last: _on_tab_changed counts on the tab indices above)
+		net_tab = QWidget()
+		self._init_net_ui(net_tab)
+		self.tabs.addTab(net_tab, "Net")
+
 		self.tabs.currentChanged.connect(self._on_tab_changed)
 
 	def _init_interceptor_ui(self, root_layout):
-		interceptor_group = QGroupBox("Interceptor (PX4)")
+		interceptor_group = QGroupBox("Interceptor")
 		layout = QVBoxLayout(interceptor_group)
 		root_layout.addWidget(interceptor_group, 1)
 
@@ -854,8 +939,264 @@ class ControlPanelWindow(QMainWindow):
 		telem_layout.addWidget(self.lbl_drone_msg, 5, 0, 1, 4)
 
 		layout.addWidget(telem_group)
-		self._init_vision_noise_ui(layout)
+		self._init_turret_ui(layout)
 		layout.addStretch()
+
+	def _init_turret_ui(self, parent_layout):
+		turret_group = QGroupBox("Net Gun Turret")
+		turret_layout = QVBoxLayout(turret_group)
+		turret_layout.setSpacing(4)
+
+		# Top row: Angle readout
+		top_row = QHBoxLayout()
+		top_row.addWidget(QLabel("Pitch Angle:"))
+		self.lbl_turret_val = QLabel("0.0°")
+		self.lbl_turret_val.setStyleSheet("font-weight: bold; font-size: 13px;")
+		top_row.addWidget(self.lbl_turret_val)
+		top_row.addStretch()
+		turret_layout.addLayout(top_row)
+
+		# Slider and Spinbox row
+		ctrl_row = QHBoxLayout()
+		self.slider_turret_pitch = QSlider(Qt.Horizontal)
+		self.slider_turret_pitch.setRange(0, 450)  # 0.0 to 45.0 degrees (0.1 deg res)
+		self.slider_turret_pitch.setValue(0)
+		self.spin_turret_pitch = QDoubleSpinBox()
+		self.spin_turret_pitch.setRange(0.0, 45.0)
+		self.spin_turret_pitch.setSingleStep(1.0)
+		self.spin_turret_pitch.setDecimals(1)
+		self.spin_turret_pitch.setSuffix("°")
+		self.spin_turret_pitch.setValue(0.0)
+
+		ctrl_row.addWidget(self.slider_turret_pitch, 1)
+		ctrl_row.addWidget(self.spin_turret_pitch)
+		turret_layout.addLayout(ctrl_row)
+
+		# Preset buttons row (0° Stowed, 15°, 30°, 45° Max)
+		presets_row = QHBoxLayout()
+		presets_row.setSpacing(4)
+		for angle, label in [(0.0, "0° (Stowed)"), (15.0, "15°"), (30.0, "30°"), (45.0, "45° (Max)")]:
+			btn = QPushButton(label)
+			btn.setFixedHeight(24)
+			btn.clicked.connect(lambda _, a=angle: self._set_turret_pitch(a))
+			presets_row.addWidget(btn)
+		turret_layout.addLayout(presets_row)
+
+		# Fire Net button row (plain standard buttons)
+		action_row = QHBoxLayout()
+		self.btn_fire_net = QPushButton("Fire Net")
+		self.btn_fire_net.setFixedHeight(26)
+		self.btn_clear_nets = QPushButton("Clear")
+		self.btn_clear_nets.setFixedWidth(60)
+		self.btn_clear_nets.setFixedHeight(26)
+		action_row.addWidget(self.btn_fire_net, 1)
+		action_row.addWidget(self.btn_clear_nets)
+		turret_layout.addLayout(action_row)
+
+		parent_layout.addWidget(turret_group)
+
+		# Connections
+		self.slider_turret_pitch.valueChanged.connect(self._on_turret_slider_changed)
+		self.slider_turret_pitch.sliderReleased.connect(self._on_turret_slider_released)
+		self.spin_turret_pitch.valueChanged.connect(self._on_turret_spin_changed)
+		self.btn_fire_net.clicked.connect(self._on_fire_net)
+		self.btn_clear_nets.clicked.connect(self._on_clear_nets)
+
+	def _on_fire_net(self):
+		def _worker():
+			try:
+				url = "http://127.0.0.1:8003/fire"
+				req = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+				with urllib.request.urlopen(req, timeout=1.0) as resp:
+					pass
+			except Exception:
+				pass
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+	def _on_clear_nets(self):
+		def _worker():
+			try:
+				url = "http://127.0.0.1:8003/clear"
+				req = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+				with urllib.request.urlopen(req, timeout=1.0) as resp:
+					pass
+			except Exception:
+				pass
+
+		threading.Thread(target=_worker, daemon=True).start()
+
+	def _on_turret_slider_changed(self, val):
+		deg = val / 10.0
+		self.lbl_turret_val.setText(f"{deg:.1f}°")
+		if abs(self.spin_turret_pitch.value() - deg) > 0.05:
+			self.spin_turret_pitch.blockSignals(True)
+			self.spin_turret_pitch.setValue(deg)
+			self.spin_turret_pitch.blockSignals(False)
+		self._send_turret_pitch_to_px4(deg)
+
+	def _on_turret_slider_released(self):
+		deg = self.slider_turret_pitch.value() / 10.0
+		self._send_turret_pitch_to_px4(deg)
+
+	def _on_turret_spin_changed(self, deg):
+		slider_val = int(round(deg * 10.0))
+		self.lbl_turret_val.setText(f"{deg:.1f}°")
+		if self.slider_turret_pitch.value() != slider_val:
+			self.slider_turret_pitch.blockSignals(True)
+			self.slider_turret_pitch.setValue(slider_val)
+			self.slider_turret_pitch.blockSignals(False)
+		self._send_turret_pitch_to_px4(deg)
+
+	def _set_turret_pitch(self, deg):
+		self.spin_turret_pitch.setValue(deg)
+
+	def _send_turret_pitch_to_px4(self, deg):
+		deg = max(0.0, min(45.0, float(deg)))
+		if hasattr(self, "mav_worker") and self.mav_worker is not None:
+			self.mav_worker.set_param("INT_TURRET_PITCH", deg)
+
+	# net parameters of tools/net_launcher.py (EDITABLE_PARAMS): key, label, unit, display scale,
+	# display min, max, decimals, step, tooltip
+	NET_PARAMS = [
+		("open_diameter", "Open Diameter", " m", 1.0, 1.0, 6.0, 2, 0.1, "Open hexagon, corner to corner"),
+		("mesh_size", "Mesh Size", " cm", 100.0, 5.0, 60.0, 0, 1.0, "Mesh opening, sets the total cord length"),
+		("cord_diameter", "Cord Diameter", " mm", 1000.0, 0.3, 3.0, 2, 0.1, "Braided Dyneema cord"),
+		("ball_diameter", "Ball Diameter", " mm", 1000.0, 6.0, 30.0, 1, 1.0, "Steel balls at the 6 corners"),
+		("muzzle_speed", "Muzzle Speed", " m/s", 1.0, 10.0, 300.0, 0, 5.0, "Ball speed relative to the vehicle"),
+		("splay_deg", "Splay Angle", "°", 1.0, 5.0, 45.0, 1, 1.0, "Ball launch angle off the barrel axis"),
+	]
+
+	def _init_net_ui(self, parent):
+		layout = QVBoxLayout(parent)
+		layout.setContentsMargins(10, 10, 10, 10)
+		layout.setSpacing(8)
+
+		# 1. Net & launcher parameters
+		params_group = QGroupBox("Net & Launcher")
+		params_layout = QVBoxLayout(params_group)
+		grid = QGridLayout()
+		grid.setHorizontalSpacing(10)
+		grid.setVerticalSpacing(4)
+
+		self.net_editors = {}
+		for row, (key, label, unit, scale, lo, hi, dec, step, tip) in enumerate(self.NET_PARAMS):
+			editor = QDoubleSpinBox()
+			editor.setRange(lo, hi)
+			editor.setDecimals(dec)
+			editor.setSingleStep(step)
+			editor.setSuffix(unit)
+			editor.setToolTip(tip)
+			editor.setFixedWidth(110)
+			self.net_editors[key] = editor
+			hint = QLabel(tip)
+			hint.setStyleSheet("color: gray;")
+			grid.addWidget(QLabel(label + ":"), row, 0)
+			grid.addWidget(editor, row, 1)
+			grid.addWidget(hint, row, 2)
+		grid.setColumnStretch(2, 1)
+		params_layout.addLayout(grid)
+
+		self.lbl_net_derived = QLabel("Net -- g, balls 6 x -- g, cord -- m")
+		self.lbl_net_derived.setStyleSheet("font-weight: bold;")
+		params_layout.addWidget(self.lbl_net_derived)
+
+		btn_row = QHBoxLayout()
+		btn_reload = QPushButton("Reload")
+		btn_reload.setToolTip("Read the current parameters from the net launcher")
+		btn_reload.clicked.connect(self.net_worker.fetch_params)
+		btn_apply = QPushButton("Apply")
+		btn_apply.setStyleSheet("font-weight: bold;")
+		btn_apply.setToolTip("Send to the net launcher, used from the next shot")
+		btn_apply.clicked.connect(self._on_net_apply)
+		btn_save = QPushButton("Save to interceptor.yaml")
+		btn_save.setToolTip("Write the applied parameters to the net: section of interceptor.yaml")
+		btn_save.clicked.connect(self.net_worker.save_params)
+		btn_row.addWidget(btn_reload)
+		btn_row.addStretch()
+		btn_row.addWidget(btn_apply)
+		btn_row.addWidget(btn_save)
+		params_layout.addLayout(btn_row)
+		layout.addWidget(params_group)
+
+		# 2. The net in the air (the launcher keeps one net at a time)
+		flight_group = QGroupBox("Net in Flight")
+		flight_layout = QVBoxLayout(flight_group)
+		fgrid = QGridLayout()
+		fgrid.setVerticalSpacing(2)
+		self.net_tel = {}
+		items = [
+			("Launcher:", "launcher", 0, 0), ("Shots:", "shots", 0, 2),
+			("Net:", "id", 1, 0), ("Phase:", "phase", 1, 2),
+			("Flight Time:", "t", 2, 0), ("Distance:", "dist", 2, 2),
+			("Spread:", "spread", 3, 0), ("Speed:", "speed", 3, 2),
+		]
+		for title, key, row, col in items:
+			self.net_tel[key] = QLabel("--")
+			fgrid.addWidget(QLabel(title), row, col)
+			fgrid.addWidget(self.net_tel[key], row, col + 1)
+		flight_layout.addLayout(fgrid)
+
+		action_row = QHBoxLayout()
+		btn_fire = QPushButton("Fire Net")
+		btn_fire.setFixedHeight(26)
+		btn_fire.clicked.connect(self._on_fire_net)
+		btn_clear = QPushButton("Clear")
+		btn_clear.setFixedWidth(60)
+		btn_clear.setFixedHeight(26)
+		btn_clear.clicked.connect(self._on_clear_nets)
+		action_row.addWidget(btn_fire, 1)
+		action_row.addWidget(btn_clear)
+		flight_layout.addLayout(action_row)
+		layout.addWidget(flight_group)
+
+		self.lbl_net_status = QLabel("Waiting for the net launcher...")
+		self.lbl_net_status.setStyleSheet("color: gray;")
+		layout.addWidget(self.lbl_net_status)
+		layout.addStretch()
+
+	def _on_net_apply(self):
+		values = {}
+		for key, _, _, scale, *_ in self.NET_PARAMS:
+			values[key] = self.net_editors[key].value() / scale
+		self.net_worker.send_params(values)
+
+	def on_net_params(self, data):
+		for key, _, _, scale, *_ in self.NET_PARAMS:
+			value = data.get("params", {}).get(key)
+			editor = self.net_editors[key]
+			if value is not None and not editor.hasFocus():
+				editor.blockSignals(True)
+				editor.setValue(float(value) * scale)
+				editor.blockSignals(False)
+
+		d = data.get("derived", {})
+		if d:
+			net_g, ball_g = d["net_mass_kg"] * 1000.0, d["ball_mass_kg"] * 1000.0
+			self.lbl_net_derived.setText(
+				f"Net {net_g:.0f} g, balls 6 x {ball_g:.1f} g, total {net_g + 6 * ball_g:.0f} g, "
+				f"cord {d['cord_length_m']:.0f} m"
+			)
+
+	def on_net_status(self, data):
+		if not self.net_params_loaded:
+			self.net_params_loaded = True
+			self.net_worker.fetch_params()
+
+		self.net_tel["launcher"].setText("Ready" if data.get("ready") else "No vehicle pose")
+		self.net_tel["shots"].setText(str(data.get("launch_count", "--")))
+		net = data.get("net")
+		if net is None:
+			for key in ("id", "phase", "t", "dist", "spread", "speed"):
+				self.net_tel[key].setText("--")
+			return
+
+		self.net_tel["id"].setText(f"#{net['id']}")
+		self.net_tel["phase"].setText(str(net["phase"]).upper())
+		self.net_tel["t"].setText(f"{net['t']:.1f} s")
+		self.net_tel["dist"].setText(f"{net['dist']:.1f} m")
+		self.net_tel["spread"].setText(f"{net['spread']:.2f} m")
+		self.net_tel["speed"].setText(f"{net['speed']:.1f} m/s")
 
 	def _init_vision_noise_ui(self, parent_layout):
 		noise_group = QGroupBox("Vision Detector Noise")
@@ -1862,6 +2203,19 @@ class ControlPanelWindow(QMainWindow):
 					editor.blockSignals(True)
 					editor.setValue(val)
 					editor.blockSignals(False)
+
+		if name == "INT_TURRET_PITCH":
+			deg = float(val)
+			if hasattr(self, "spin_turret_pitch") and not self.spin_turret_pitch.hasFocus():
+				self.spin_turret_pitch.blockSignals(True)
+				self.spin_turret_pitch.setValue(deg)
+				self.spin_turret_pitch.blockSignals(False)
+			if hasattr(self, "slider_turret_pitch") and not self.slider_turret_pitch.isSliderDown():
+				self.slider_turret_pitch.blockSignals(True)
+				self.slider_turret_pitch.setValue(int(round(deg * 10.0)))
+				self.slider_turret_pitch.blockSignals(False)
+			if hasattr(self, "lbl_turret_val"):
+				self.lbl_turret_val.setText(f"{deg:.1f}°")
 
 		if hasattr(self, "lbl_param_status"):
 			self.lbl_param_status.setText(f"'{name}' = {val} updated from PX4.")

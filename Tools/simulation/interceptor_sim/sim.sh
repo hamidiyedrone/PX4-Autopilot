@@ -225,7 +225,7 @@ stop_previous() {
 		[ "${part}" = "${GZ_PARTITION:-}" ] && pids+=("${p}")
 	done
 
-	for p in $(pgrep -f "^${BUILD_DIR}/bin/px4 -i") $(pgrep -f "^python3 (-u )?${SCRIPT_DIR}/tools/(target_sim|ground_relay|sim_detector|view_hud|control_panel).py"); do
+	for p in $(pgrep -f "${BUILD_DIR}/bin/px4 -i") $(pgrep -f "tools/(target_sim|ground_relay|sim_detector|view_hud|control_panel|net_launcher)\.py"); do
 		pids+=("${p}")
 	done
 
@@ -306,6 +306,12 @@ if [ "${TARGET_AUTO:-1}" != "0" ]; then
 			--interceptor "${INTERCEPTOR_NAME}" --target "${TARGET_NAME}" ${DETECTOR_ARGS:-} \
 			> "${SCRIPT_DIR}/build/sim_detector.log" 2>&1 &
 		echo "Detector: tools/sim_detector.py, ground-truth vision → udp 15600, log: ${SCRIPT_DIR}/build/sim_detector.log"
+	fi
+
+	if [ "${NET_LAUNCHER:-1}" != "0" ] && [ "${INTERCEPTOR}" != "0" ]; then
+		${PDEATH} python3 -u "${SCRIPT_DIR}/tools/net_launcher.py" --world "${WORLD}" \
+			--interceptor "${INTERCEPTOR_NAME}" > "${SCRIPT_DIR}/build/net_launcher.log" 2>&1 &
+		echo "Net Launcher: tools/net_launcher.py in the background, log: ${SCRIPT_DIR}/build/net_launcher.log"
 	fi
 fi
 
