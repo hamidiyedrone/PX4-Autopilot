@@ -3,7 +3,8 @@
  *
  * The vision computer (on the vehicle a Jetson running YOLO + PnP, in SITL
  * Tools/simulation/interceptor_sim/tools/sim_detector.py) sends one binary packet per
- * processed camera frame, over UART on the vehicle and over UDP in SITL. This driver
+ * processed camera frame, over UART on the vehicle and over UDP in SITL and in HITL
+ * (Ethernet boards, e.g. Pixhawk 6X). This driver
  * validates the packets (see target_vision_protocol.h), rotates the line of sight and the
  * target attitude from the camera optical frame into the body FRD frame with the mount
  * angles (TGV_MNT_*) and publishes target_detection.
@@ -13,7 +14,7 @@
  * that is the reference the guidance wants.
  *
  *   target_vision start -d /dev/ttyS3 -b 921600    # vehicle
- *   target_vision start -u 15600                   # SITL
+ *   target_vision start -u 15600                   # SITL, HITL over Ethernet
  */
 
 #include "TargetVision.hpp"
@@ -25,10 +26,11 @@
 
 #include <errno.h>
 #include <float.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__PX4_POSIX)
+#if defined(__PX4_POSIX) || defined(CONFIG_NET)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -74,7 +76,7 @@ void TargetVision::updateMountRotation()
 bool TargetVision::openTransport()
 {
 	if (_udp_port >= 0) {
-#if defined(__PX4_POSIX)
+#if defined(__PX4_POSIX) || defined(CONFIG_NET)
 		_udp_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
 
 		if (_udp_fd < 0) {
@@ -125,7 +127,7 @@ void TargetVision::closeTransport()
 		_uart = nullptr;
 	}
 
-#if defined(__PX4_POSIX)
+#if defined(__PX4_POSIX) || defined(CONFIG_NET)
 
 	if (_udp_fd >= 0) {
 		::close(_udp_fd);
@@ -141,7 +143,7 @@ int TargetVision::readTransport(uint8_t *buffer, size_t length)
 		return _uart->readAtLeast(buffer, length, 1, TRANSPORT_TIMEOUT_MS);
 	}
 
-#if defined(__PX4_POSIX)
+#if defined(__PX4_POSIX) || defined(CONFIG_NET)
 
 	if (_udp_fd >= 0) {
 		struct pollfd fds {};
@@ -330,11 +332,11 @@ int TargetVision::print_status()
 		PX4_INFO("no packet received yet");
 
 	} else {
-		PX4_INFO("last packet %.3f s ago, frame %u, sender latency %.1f ms",
+		PX4_INFO("last packet %.3f s ago, frame %" PRIu32 ", sender latency %.1f ms",
 			 (double)hrt_elapsed_time(&_last_packet) * 1e-6, _last_frame_id, (double)_last_latency_us * 1e-3);
 	}
 
-	PX4_INFO("packets %u, detections %u, dropped frames %u, crc errors %u, format errors %u",
+	PX4_INFO("packets %" PRIu32 ", detections %" PRIu32 ", dropped frames %" PRIu32 ", crc errors %" PRIu32 ", format errors %" PRIu32,
 		 _packets, _detections, _dropped_frames, _crc_errors, _format_errors);
 
 	PX4_INFO("camera optical axis in body FRD: [%.2f %.2f %.2f]",
@@ -428,7 +430,8 @@ Receives target detections from the vision computer and publishes them as the
 target_detection uORB topic, one message per camera frame the sender processed.
 
 The sender is a Jetson running the detector on the vehicle (UART) and
-Tools/simulation/interceptor_sim/tools/sim_detector.py in SITL (UDP). The packet format is
+Tools/simulation/interceptor_sim/tools/sim_detector.py in SITL and HITL (UDP, in HITL over
+Ethernet on boards with networking). The packet format is
 documented in src/drivers/target_vision/target_vision_protocol.h.
 
 The line of sight and the target attitude arrive in the camera optical frame and are
@@ -440,7 +443,7 @@ camera away from looking forward, so an interceptor whose camera looks along the
 Vehicle, Jetson on TELEM2:
 $ target_vision start -d /dev/ttyS2 -b 921600
 
-SITL:
+SITL, or HITL over Ethernet:
 $ target_vision start -u 15600
 )DESCR_STR");
 
