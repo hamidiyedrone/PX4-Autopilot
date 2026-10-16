@@ -75,6 +75,17 @@ while [ $# -gt 0 ]; do
 			shift
 			HEAD_ON_DIST="$1"
 			;;
+		--hitl=*)
+			HITL=1
+			HITL_DEVICE="${1#*=}"
+			;;
+		--hitl)
+			HITL=1
+			if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
+				shift
+				HITL_DEVICE="$1"
+			fi
+			;;
 	esac
 	shift
 done
@@ -332,8 +343,14 @@ start_px4() { # instance autostart model_name [px4 options]
 }
 
 if [ "${INTERCEPTOR}" != "0" ]; then
-	# interceptor: PX4 in the foreground (pxh> shell)
-	start_px4 "${INTERCEPTOR_INSTANCE}" 4051 "${INTERCEPTOR_NAME}"
+	if [ -n "${HITL}" ]; then
+		echo "Starting Hardware-in-the-Loop (HITL) bridge to ${HITL_DEVICE:-/dev/ttyACM0}..."
+		exec python3 -u "${SCRIPT_DIR}/tools/hitl_bridge.py" --world "${WORLD}" --model "${INTERCEPTOR_NAME}" \
+			--device "${HITL_DEVICE:-/dev/ttyACM0}" ${HITL_ARGS:-}
+	else
+		# interceptor: PX4 in the foreground (pxh> shell)
+		start_px4 "${INTERCEPTOR_INSTANCE}" 4051 "${INTERCEPTOR_NAME}"
+	fi
 else
 	wait  # keep Gazebo running
 fi

@@ -152,14 +152,17 @@ def start_noise_control_server(noise_state, lock, port=8002):
     class NoiseHandler(BaseHTTPRequestHandler):
         def _send_json(self, data, code=200):
             body = json.dumps(data).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def do_OPTIONS(self):
             self.send_response(200)
@@ -246,6 +249,8 @@ def main():
                     help="interceptor model name in Gazebo")
     ap.add_argument("--target", default="talon1718_1",
                     help="target model name in Gazebo")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="IP of the target_vision driver (HITL over Ethernet: the board IP, e.g. 10.41.10.2)")
     ap.add_argument("--port", type=int, default=15600,
                     help="UDP port of the target_vision driver")
     ap.add_argument("--rate", type=float, default=0.0,
@@ -270,6 +275,10 @@ def main():
                     help="range measurement jitter stddev [m], default: from interceptor.yaml or 0.15")
     ap.add_argument("--ctrl-port", type=int, default=8002,
                     help="HTTP control port for dynamic noise tuning (default: 8002)")
+    ap.add_argument("--serial", default=None,
+                    help="Serial device to transmit target_vision packets to (e.g. /dev/ttyUSB0 for HITL)")
+    ap.add_argument("--baud", type=int, default=921600,
+                    help="Baud rate for serial device (default: 921600)")
     a = ap.parse_args()
 
     # camera intrinsics: from interceptor.yaml unless overridden
@@ -357,7 +366,17 @@ def main():
 
     # UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    dest = ("127.0.0.1", a.port)
+    dest = (a.host, a.port)
+
+    # Optional Serial connection for Hardware-in-the-Loop (target_vision over UART)
+    ser = None
+    if a.serial:
+        try:
+            import serial
+            ser = serial.Serial(a.serial, a.baud, timeout=0)
+            print(f"sim_detector: opened serial device {a.serial} at {a.baud} baud for target_vision")
+        except Exception as e:
+            print(f"sim_detector: warning - failed to open serial device {a.serial}: {e}")
 
     # 2-axis gimbal setup
     gimbal_cfg = cfg.get("gimbal", {})
@@ -440,6 +459,14 @@ def main():
     latency_queue = collections.deque()
     bbox_noise_state = np.zeros(4)  # [cx, cy, w, h]
 
+    def send_packet(pkt):
+        sock.sendto(pkt, dest)
+        if ser is not None:
+            try:
+                ser.write(pkt)
+            except Exception:
+                pass
+
     def dispatch_packet(pkt_to_send, msg_to_send):
         with noise_lock:
             cur_enabled = noise_state["enabled"]
@@ -447,15 +474,15 @@ def main():
         if not cur_enabled or cur_latency <= 0:
             while latency_queue:
                 p_out, m_out = latency_queue.popleft()
-                sock.sendto(p_out, dest)
+                send_packet(p_out)
                 pub_detection.publish(m_out)
-            sock.sendto(pkt_to_send, dest)
+            send_packet(pkt_to_send)
             pub_detection.publish(msg_to_send)
             return
         latency_queue.append((pkt_to_send, msg_to_send))
         while len(latency_queue) > cur_latency:
             p_out, m_out = latency_queue.popleft()
-            sock.sendto(p_out, dest)
+            send_packet(p_out)
             pub_detection.publish(m_out)
 
     while True:
