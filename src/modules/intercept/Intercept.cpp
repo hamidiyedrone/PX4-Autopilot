@@ -440,8 +440,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
 	} else if (dt > 0.005f) {
-		constexpr float SPEED_EST_TAU = 0.40f;
-		const float alpha_spd = math::constrain(dt / (SPEED_EST_TAU + dt), 0.02f, 0.30f);
+		constexpr float SPEED_EST_TAU = 0.15f;
+		const float alpha_spd = math::constrain(dt / (SPEED_EST_TAU + dt), 0.05f, 0.50f);
 		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 10.0f, max_xy_vel) - _target_speed_est);
 	}
 
