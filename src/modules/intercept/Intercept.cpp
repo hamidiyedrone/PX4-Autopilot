@@ -207,7 +207,6 @@ void Intercept::ResetGuidanceState()
 	_last_visual_dist = -1.f;
 	_filt_visual_closing_speed = 0.f;
 	_target_speed_est = 25.f;
-	_lat_integral = 0.f;
 	_payload_controller.reset();
 }
 
@@ -525,35 +524,11 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Lateral strafe controller: corrects crosswind drift and target lateral offset
-	const float max_lat_vel = _param_int_trm_lat_max.get();
-	const float lat_tol = _param_int_trm_lat_tol.get();
-	float vel_lat_corr = 0.0f;
-	if (max_lat_vel > 0.001f) {
-		const float offset_x = cx - 0.50f;
-		float lat_err = 0.0f;
-		if (fabsf(offset_x) > lat_tol) {
-			lat_err = (offset_x > 0.0f) ? (offset_x - lat_tol) : (offset_x + lat_tol);
-		}
-
-		// Anti-windup integration on lateral screen offset (rejects steady crosswind drift)
-		if (dt > 0.005f) {
-			_lat_integral = math::constrain(_lat_integral + offset_x * dt, -3.0f, 3.0f);
-		}
-
-		const float kp_lat = _param_int_trm_kp_lat.get();
-		const float ki_lat = _param_int_trm_ki_lat.get();
-		vel_lat_corr = math::constrain(lat_err * kp_lat + _lat_integral * ki_lat, -max_lat_vel, max_lat_vel);
-	} else {
-		_lat_integral = 0.0f;
-	}
-
-	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
-	const float right_x = -los_y_norm;
-	const float right_y =  los_x_norm;
-
-	float desired_vx = los_x_norm * _fwd_speed_cmd + right_x * vel_lat_corr;
-	float desired_vy = los_y_norm * _fwd_speed_cmd + right_y * vel_lat_corr;
+	// Coordinated Flight along Line-of-Sight:
+	// Forward velocity setpoint is directed purely along horizontal Line-of-Sight in NED frame.
+	// Multicopter tilt dynamically counteracts wind drift while yaw aligns body with target.
+	const float desired_vx = los_x_norm * _fwd_speed_cmd;
+	const float desired_vy = los_y_norm * _fwd_speed_cmd;
 
 	// Slew-rate limit horizontal acceleration matching MPC_ACC_HOR
 	if (_last_cmd_valid && dt > 0.005f) {
@@ -608,20 +583,15 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 		// Optical tracking offset outside deadband
 		float visual_yaw_offset = 0.0f;
-		if (fabsf(cx - 0.50f) > lat_tol) {
-			const float offset_yaw = (cx > 0.50f) ? (cx - 0.50f - lat_tol) : (cx - 0.50f + lat_tol);
+		const float yaw_tol = _param_int_trm_yaw_tol.get();
+		if (fabsf(cx - 0.50f) > yaw_tol) {
+			const float offset_yaw = (cx > 0.50f) ? (cx - 0.50f - yaw_tol) : (cx - 0.50f + yaw_tol);
 			visual_yaw_offset = offset_yaw * OPTICAL_YAW_GAIN;
 		}
 
-		// Turn Coordinator: Feed back vehicle roll angle into yaw guidance.
-		// When lateral strafe is active (max_lat_vel > 0.001f), heading is strictly
-		// dedicated to pointing the nose (camera & turret) at the target, so steady-state roll
-		// from crosswind does not drag the turret away from the target.
-		float roll_coord = 0.0f;
-		if (max_lat_vel <= 0.001f) {
-			const matrix::Eulerf euler(matrix::Quatf(_vehicle_attitude.q));
-			roll_coord = euler.phi() * _param_int_trm_tc_gain.get();
-		}
+		// Turn Coordinator: Feed back vehicle roll angle into yaw guidance (active only if INT_TRM_TC_GAIN > 0)
+		const matrix::Eulerf euler(matrix::Quatf(_vehicle_attitude.q));
+		const float roll_coord = euler.phi() * _param_int_trm_tc_gain.get();
 
 		desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset + roll_coord);
 	}
