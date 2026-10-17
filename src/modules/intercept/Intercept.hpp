@@ -194,6 +194,7 @@ private:
 		(ParamFloat<px4::params::INT_TRM_YAWRATE>) _param_int_trm_yawrate,
 		(ParamFloat<px4::params::INT_TRM_TC_GAIN>) _param_int_trm_tc_gain,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
+		(ParamFloat<px4::params::MPC_ACC_HOR_MAX>) _param_mpc_acc_hor_max,
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max
 	)
 };

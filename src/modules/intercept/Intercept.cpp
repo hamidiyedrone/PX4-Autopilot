@@ -461,6 +461,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float kp_opt = _param_int_trm_kp_fwd.get();
 	const float kd_opt = _param_int_trm_kd_fwd.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float max_dec_hor = _param_mpc_acc_hor_max.get();
 	const float dist_tol = math::max(_param_int_trm_fwd_tol.get(), 0.05f);
 
 	// Option 1: Pure deadband with zero position feedback inside corridor
@@ -471,20 +472,21 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 	if (dist_err > dist_tol) {
 		const float excess = dist_err - dist_tol;
-		pos_effort = math::min(kp_opt * 0.15f * excess, 3.0f);
-		desired_closing = math::constrain(0.30f * excess, 0.0f, 3.0f);
+		pos_effort = kp_opt * 0.15f * excess;
+		desired_closing = 0.40f * excess;
 	} else if (dist_err < -dist_tol) {
 		const float excess = dist_err + dist_tol;
-		pos_effort = math::max(kp_opt * 0.15f * excess, -3.0f);
-		desired_closing = math::constrain(0.30f * excess, -3.0f, 0.0f);
+		pos_effort = kp_opt * 0.15f * excess;
+		desired_closing = 0.40f * excess;
 	}
 
 	// Velocity damping against closing rate deviations (damps closing rate, smoothly matches target speed)
+	// No artificial small clamps: full control authority to react to target acceleration/braking
 	const float closing_err = _filt_visual_closing_speed - desired_closing;
-	const float vel_damping = math::constrain(-kd_opt * 0.40f * closing_err, -2.5f, 2.5f);
+	const float vel_damping = -kd_opt * 0.50f * closing_err;
 
-	// Combined delta_v
-	float delta_v = math::constrain(pos_effort + vel_damping, -3.5f, 3.5f);
+	// Combined delta_v - naturally bounded only by vehicle speed limits below
+	const float delta_v = pos_effort + vel_damping;
 
 	// Adaptive lateral corner/swerve braking when close (< 5m):
 	// If the target shifts laterally away from boresight center past INT_TRM_BRK_TOL,
@@ -510,16 +512,15 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// throttle back forward speed to avoid rushing forward under the target and losing visual lock
 	const float overhead_factor = math::constrain(los_xy_norm / 0.70f, 0.25f, 1.0f);
 
-	// Commanded forward speed referenced to smooth optical target speed estimate
-	const float desired_fwd_speed = math::constrain((_target_speed_est + delta_v) * overhead_factor - corner_brake, 10.0f, max_xy_vel);
+	// Commanded forward speed referenced to smooth optical target speed estimate, bounded only by vehicle speed limits
+	const float desired_fwd_speed = math::constrain((_target_speed_est + delta_v) * overhead_factor - corner_brake, 0.0f, max_xy_vel);
 
-	// Slew-rate limit forward speed command in close pursuit
-	constexpr float MAX_CLOSE_ACCEL = 2.0f;
-	constexpr float MAX_CLOSE_DECEL = 2.5f;
+	// Slew-rate limit forward speed command matching PX4 multicopter acceleration parameters:
+	// Acceleration rate limited by MPC_ACC_HOR, Deceleration (braking) rate limited by MPC_ACC_HOR_MAX
 	const float prev_speed_cmd = _fwd_speed_cmd;
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dv_acc = MAX_CLOSE_ACCEL * dt;
-		const float max_dv_dec = MAX_CLOSE_DECEL * dt;
+		const float max_dv_acc = max_acc_hor * dt;
+		const float max_dv_dec = max_dec_hor * dt;
 		_fwd_speed_cmd = math::constrain(desired_fwd_speed, _fwd_speed_cmd - max_dv_dec, _fwd_speed_cmd + max_dv_acc);
 		_fwd_accel_cmd = (_fwd_speed_cmd - prev_speed_cmd) / dt;
 	} else {
@@ -534,9 +535,9 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float desired_vx = los_x_norm * _fwd_speed_cmd;
 	const float desired_vy = los_y_norm * _fwd_speed_cmd;
 
-	// Slew-rate limit horizontal acceleration matching MPC_ACC_HOR
+	// Slew-rate limit horizontal acceleration matching MPC_ACC_HOR_MAX
 	if (_last_cmd_valid && dt > 0.005f) {
-		const float max_dvh = max_acc_hor * dt;
+		const float max_dvh = max_dec_hor * dt;
 		vel_cmd(0) = math::constrain(desired_vx, _last_vel_cmd(0) - max_dvh, _last_vel_cmd(0) + max_dvh);
 		vel_cmd(1) = math::constrain(desired_vy, _last_vel_cmd(1) - max_dvh, _last_vel_cmd(1) + max_dvh);
 	} else {
