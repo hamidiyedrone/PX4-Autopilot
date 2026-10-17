@@ -186,6 +186,11 @@ def load_intercept_param_metadata():
 				"short": "Terminal standoff distance deadband tolerance",
 				"long": "Distance deadband tolerance (+/- meters) around desired standoff in close pursuit to prevent pitch oscillations."
 			},
+			"INT_TRM_MAX_APPR": {
+				"name": "INT_TRM_MAX_APPR", "type": "float", "default": 4.0, "min": 1.0, "max": 15.0, "decimal": 1,
+				"short": "Terminal maximum pursuit approach speed",
+				"long": "Maximum forward overtaking speed (m/s) added above target speed when closing distance from behind in close pursuit."
+			},
 			"INT_TRM_YAW_TOL": {
 				"name": "INT_TRM_YAW_TOL", "type": "float", "default": 0.005, "min": 0.005, "max": 0.15, "decimal": 3,
 				"short": "Terminal yaw optical tracking deadband tolerance",

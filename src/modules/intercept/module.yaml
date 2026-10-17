@@ -112,6 +112,17 @@ parameters:
             max: 1.0
             decimal: 2
 
+        INT_TRM_MAX_APPR:
+            description:
+                short: Terminal maximum pursuit overtaking approach speed
+                long: Maximum forward overtaking speed (m/s) added above target speed when closing distance from behind in close pursuit.
+            type: float
+            default: 4.0
+            min: 1.0
+            max: 15.0
+            unit: m/s
+            decimal: 1
+
         INT_TRM_YAW_TOL:
             description:
                 short: Terminal yaw optical tracking deadband tolerance

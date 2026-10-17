@@ -466,6 +466,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 	const float max_dec_hor = _param_mpc_acc_hor_max.get();
 	const float dist_tol = math::max(_param_int_trm_fwd_tol.get(), 0.05f);
+	const float max_appr_spd = _param_int_trm_max_appr.get();
 
 	// Option 1: Pure deadband with zero position feedback inside corridor
 	// - Inside corridor (|dist_err| <= dist_tol): pos_effort is exactly 0. Drone cruises at target speed.
@@ -475,21 +476,24 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 
 	if (dist_err > dist_tol) {
 		const float excess = dist_err - dist_tol;
-		pos_effort = kp_opt * 0.15f * excess;
-		desired_closing = 0.40f * excess;
+		pos_effort = math::min(kp_opt * 0.15f * excess, max_appr_spd);
+		desired_closing = math::constrain(0.35f * excess, 0.0f, max_appr_spd * 0.85f);
 	} else if (dist_err < -dist_tol) {
 		const float excess = dist_err + dist_tol;
-		pos_effort = kp_opt * 0.15f * excess;
-		desired_closing = 0.40f * excess;
+		// Asymmetric braking: NO clamp when too close or target decelerates!
+		// Drone has full authority to command aggressive braking down to 0 m/s.
+		pos_effort = kp_opt * 0.25f * excess;
+		desired_closing = 0.50f * excess;
 	}
 
 	// Velocity damping against closing rate deviations (damps closing rate, smoothly matches target speed)
-	// No artificial small clamps: full control authority to react to target acceleration/braking
 	const float closing_err = _filt_visual_closing_speed - desired_closing;
 	const float vel_damping = -kd_opt * 0.50f * closing_err;
 
-	// Combined delta_v - naturally bounded only by vehicle speed limits below
-	const float delta_v = pos_effort + vel_damping;
+	// Asymmetric delta_v:
+	// - Positive (approaching/closing): safely bounded by max_appr_spd to prevent overshooting into target
+	// - Negative (braking/backing off): UNCONSTRAINED down to 0 m/s, decelerating at MPC_ACC_HOR_MAX
+	const float delta_v = math::min(pos_effort + vel_damping, max_appr_spd);
 
 	// Adaptive lateral corner/swerve braking when close (< 5m):
 	// If the target shifts laterally away from boresight center past INT_TRM_BRK_TOL,
@@ -766,7 +770,12 @@ void Intercept::Run()
 				_last_visual_time = 0;
 				_last_visual_dist = -1.f;
 				_filt_visual_closing_speed = 0.f;
-				_target_speed_est = _fwd_speed_cmd;
+				if (_target_pos_valid && _target_vel.longerThan(1.0f)) {
+					_target_speed_est = _target_vel.norm();
+					_fwd_speed_cmd = math::min(_fwd_speed_cmd, _target_speed_est + _param_int_trm_max_appr.get());
+				} else {
+					_target_speed_est = _fwd_speed_cmd;
+				}
 
 				if (!_last_cmd_valid) {
 					_last_yaw_cmd = _local_pos.heading;

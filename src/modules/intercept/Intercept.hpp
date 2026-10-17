@@ -187,6 +187,7 @@ private:
 		(ParamFloat<px4::params::INT_TRM_KP_FWD>) _param_int_trm_kp_fwd,
 		(ParamFloat<px4::params::INT_TRM_KD_FWD>) _param_int_trm_kd_fwd,
 		(ParamFloat<px4::params::INT_TRM_FWD_TOL>) _param_int_trm_fwd_tol,
+		(ParamFloat<px4::params::INT_TRM_MAX_APPR>) _param_int_trm_max_appr,
 		(ParamFloat<px4::params::INT_TRM_YAW_TOL>) _param_int_trm_yaw_tol,
 		(ParamFloat<px4::params::INT_TRM_YAW_SMTH>) _param_int_trm_yaw_smth,
 		(ParamFloat<px4::params::INT_CAM_HFOV>) _param_int_cam_hfov,
