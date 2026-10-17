@@ -100,3 +100,13 @@ net:                    # net projectile (tools/net_physics.py, fired by tools/n
   ball_diameter: 0.012  # steel balls at the 6 corners (12 mm: 7.1 g)
   muzzle_speed: 100.0   # balls, relative to the vehicle (m/s)
   splay_deg: 20.0       # ball launch angle off the barrel axis (deg)
+
+wind:                   # environmental wind and turbulence model
+  enabled: true
+  speed_mps: 0.0        # mean horizontal wind speed [m/s]
+  direction_deg: 0.0    # wind direction [deg, 0=N, 90=E, 180=S, 270=W]
+  vertical_mps: 0.0     # vertical wind airflow [m/s]
+  turbulence_pct: 0.0   # turbulence intensity percentage [0 to 100%]
+  gust_speed_mps: 3.0   # max gust speed [m/s]
+  gust_period_s: 6.0    # characteristic gust period [s]
+

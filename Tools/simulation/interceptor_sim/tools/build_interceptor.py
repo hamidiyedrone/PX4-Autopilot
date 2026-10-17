@@ -726,6 +726,7 @@ def sdf(g):
   <model name="{c["name"]}">
     <pose>0 0 {g["spawn_z"]:.3f} 0 0 0</pose>
     <link name="base_link">
+      <enable_wind>true</enable_wind>
       <inertial>
         <mass>{g["m"]:.4f}</mass>
         <inertia>

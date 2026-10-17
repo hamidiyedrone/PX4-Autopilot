@@ -44,6 +44,7 @@ from gz.msgs10.marker_pb2 import Marker
 from gz.msgs10.marker_v_pb2 import Marker_V
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.msgs10.stringmsg_pb2 import StringMsg
+from gz.msgs10.wind_pb2 import Wind
 from gz.transport13 import Node
 
 from net_physics import Net, NetParams
@@ -228,6 +229,8 @@ class NetLauncher:
 		self.node.subscribe(Double, f"/model/{interceptor}/servo_1", self._on_turret_servo)
 		self.node.subscribe(Double, f"/model/{interceptor}/command/turret_pitch", self._on_turret_servo)
 		self.node.subscribe(Double, f"/model/{interceptor}/servo_2", self._on_trigger_servo)
+		self.current_wind = np.zeros(3, dtype=float)
+		self.node.subscribe(Wind, f"/world/{world}/wind", self._on_wind)
 
 		self.server = ThreadingHTTPServer(("0.0.0.0", http_port), self._make_handler())
 		threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -274,6 +277,10 @@ class NetLauncher:
 		if should_fire:
 			print(f"NetLauncher: Trigger signal received from PX4 servo_2 ({msg.data:.2f} rad), firing net!", flush=True)
 			self.fire()
+
+	def _on_wind(self, msg):
+		with self.lock:
+			self.current_wind = np.array([msg.linear_velocity.x, msg.linear_velocity.y, msg.linear_velocity.z], dtype=float)
 
 	# --- commands ---
 
@@ -450,7 +457,7 @@ class NetLauncher:
 			# integrate every net up to the current sim time (bounded catch-up per loop)
 			for n in nets:
 				lag = t_sim - (n.t_launch + n.net.t)
-				n.net.advance(min(lag, 0.1))
+				n.net.advance(min(lag, 0.1), wind=self.current_wind)
 				if lag > 0.2 and not n.lag_warned:
 					n.lag_warned = True
 					print(f"NetLauncher: net #{n.net_id} physics {lag:.2f} s behind sim time "

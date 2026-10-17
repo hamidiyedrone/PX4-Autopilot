@@ -351,6 +351,7 @@ def sdf(g):
   <model name="talon1718">
     <pose>0 0 {-bz + 0.03:.3f} 0 0 0</pose>
     <link name="base_link">
+      <enable_wind>true</enable_wind>
       <inertial>
         <mass>{g["mass"]:.3f}</mass>
         <inertia>

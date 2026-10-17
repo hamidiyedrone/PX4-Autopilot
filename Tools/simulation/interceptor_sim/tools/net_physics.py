@@ -99,7 +99,7 @@ def hex_lattice(rings, radius):
 
 @njit(cache=True)
 def _integrate(x, x_prev, mass, edges, rest, share, corners, radius, grounded, cord_k, ball_k,
-               dt, iterations, ground_z, steps, max_spread):
+               dt, iterations, ground_z, steps, max_spread, wind):
 	"""Verlet steps with cord / ball drag and gravity, tension only cord constraints, ground
 	stop. Updates x, x_prev, grounded in place, returns the max corner spread."""
 	n = x.shape[0]
@@ -119,7 +119,9 @@ def _integrate(x, x_prev, mass, edges, rest, share, corners, radius, grounded, c
 			length = math.sqrt(d0 * d0 + d1 * d1 + d2 * d2)
 			inv = 1.0 / max(length, 1e-9)
 			t0, t1, t2 = d0 * inv, d1 * inv, d2 * inv
-			u0, u1, u2 = 0.5 * (v[i, 0] + v[j, 0]), 0.5 * (v[i, 1] + v[j, 1]), 0.5 * (v[i, 2] + v[j, 2])
+			u0 = 0.5 * (v[i, 0] + v[j, 0]) - wind[0]
+			u1 = 0.5 * (v[i, 1] + v[j, 1]) - wind[1]
+			u2 = 0.5 * (v[i, 2] + v[j, 2]) - wind[2]
 			ut = u0 * t0 + u1 * t1 + u2 * t2
 			n0, n1, n2 = u0 - ut * t0, u1 - ut * t1, u2 - ut * t2
 			k = -0.5 * cord_k * min(length, rest[e]) * math.sqrt(n0 * n0 + n1 * n1 + n2 * n2)
@@ -130,11 +132,15 @@ def _integrate(x, x_prev, mass, edges, rest, share, corners, radius, grounded, c
 			f[j, 1] += k * n1
 			f[j, 2] += k * n2
 
-		# balls: sphere drag
+		# balls: sphere drag relative to ambient wind
 		for c in corners:
-			k = -ball_k * math.sqrt(v[c, 0] ** 2 + v[c, 1] ** 2 + v[c, 2] ** 2)
-			for a in range(3):
-				f[c, a] += k * v[c, a]
+			vr0 = v[c, 0] - wind[0]
+			vr1 = v[c, 1] - wind[1]
+			vr2 = v[c, 2] - wind[2]
+			k = -ball_k * math.sqrt(vr0 * vr0 + vr1 * vr1 + vr2 * vr2)
+			f[c, 0] += k * vr0
+			f[c, 1] += k * vr1
+			f[c, 2] += k * vr2
 
 		for k in range(n):
 			for c in range(3):
@@ -231,18 +237,19 @@ class Net:
 		self.grounded = np.zeros(n, dtype=bool)
 		self.max_spread = 0.0
 
-	def step(self):
-		self._integrate(1)
+	def step(self, wind=None):
+		self._integrate(1, wind)
 
-	def _integrate(self, steps):
+	def _integrate(self, steps, wind=None):
 		p = self.p
+		w = np.zeros(3, dtype=float) if wind is None else np.asarray(wind, dtype=float)
 		self.max_spread = _integrate(self.x, self.x_prev, self.mass, self.edges, self.rest, self._share,
 		                             self.corners, self._radius, self.grounded, self._cord_k, self._ball_k,
-		                             p.dt, p.iterations, p.ground_z, steps, self.max_spread)
+		                             p.dt, p.iterations, p.ground_z, steps, self.max_spread, w)
 		self.v = (self.x - self.x_prev) / p.dt
 		self.t += steps * p.dt
 
-	def advance(self, duration):
+	def advance(self, duration, wind=None):
 		"""Integrate for duration [s] (whole steps; the remainder is left for the next call).
 		A net lying on the ground is not integrated any more, its clock still runs."""
 		steps = max(0, int(duration / self.p.dt))
@@ -250,7 +257,7 @@ class Net:
 			self.t += steps * self.p.dt
 			return
 		if steps:
-			self._integrate(steps)
+			self._integrate(steps, wind)
 
 	# --- state ---
 

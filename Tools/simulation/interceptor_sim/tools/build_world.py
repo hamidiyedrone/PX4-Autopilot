@@ -206,6 +206,9 @@ def main():
     <!-- WMM at the world origin, ENU [T] -->
     <magnetic_field>{b_east:.4e} {b_north:.4e} {b_up:.4e}</magnetic_field>
     <atmosphere type="adiabatic"/>
+    <wind>
+      <linear_velocity>0 0 0</linear_velocity>
+    </wind>
     <scene>
       <grid>false</grid>
       <ambient>0.6 0.6 0.6 1</ambient>

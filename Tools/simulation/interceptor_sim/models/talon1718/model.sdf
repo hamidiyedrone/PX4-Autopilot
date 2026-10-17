@@ -4,6 +4,7 @@
   <model name="talon1718">
     <pose>0 0 0.147 0 0 0</pose>
     <link name="base_link">
+      <enable_wind>true</enable_wind>
       <inertial>
         <mass>3.000</mass>
         <inertia>

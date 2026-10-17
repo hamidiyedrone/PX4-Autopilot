@@ -41,7 +41,26 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlencode
 
+import numpy as np
 import yaml
+
+try:
+	from gz.transport13 import Node as GzNode
+	from gz.msgs10.wind_pb2 import Wind as GzWind
+	GZ_TRANSPORT_AVAILABLE = True
+except ImportError:
+	GzNode = None
+	GzWind = None
+	GZ_TRANSPORT_AVAILABLE = False
+
+
+def get_compass_direction(deg):
+	deg = float(deg) % 360.0
+	dirs = ["K (N)", "KKB (NNE)", "KD (NE)", "DKD (ENE)", "D (E)", "DGD (ESE)", "GD (SE)", "GGD (SSE)",
+	        "G (S)", "GGB (SSW)", "GB (SW)", "BGB (WSW)", "B (W)", "BKB (WNW)", "KB (NW)", "KKB (NNW)"]
+	ix = int((deg + 11.25) / 22.5) % 16
+	return dirs[ix]
+
 
 os.environ.setdefault("MAVLINK20", "1")  # AVAILABLE_MODES is a MAVLink 2 message
 from pymavlink import mavutil  # noqa: E402
@@ -709,11 +728,12 @@ class ControlPanelWindow(QMainWindow):
 	YAW_RATE_DPS = 20.0  # matches target_sim straight-mode max turn rate
 	ALT_RATE_MPS = 4.0
 
-	def __init__(self, host="127.0.0.1", port=8000, mavlink_url="udpin:0.0.0.0:14550", detector_port=8002):
+	def __init__(self, host="127.0.0.1", port=8000, mavlink_url="udpin:0.0.0.0:14550", detector_port=8002, world="ankara"):
 		super().__init__()
 		self.host = host
 		self.port = port
 		self.detector_port = detector_port
+		self.world_name = world
 		self.current_mode = "straight"
 		self.target_speed = 25.0
 		self.target_alt = 100.0
@@ -785,6 +805,40 @@ class ControlPanelWindow(QMainWindow):
 		self.mav_worker.telemetry_received.connect(self.on_drone_telemetry)
 		self.mav_worker.message_received.connect(self.on_drone_message)
 		self.mav_worker.param_received.connect(self.on_param_received)
+
+		# Wind & Turbulence Simulation State
+		self.wind_enabled = True
+		self.wind_speed_mps = 0.0
+		self.wind_direction_deg = 0.0
+		self.wind_vertical_mps = 0.0
+		self.wind_turbulence_pct = 0.0
+		self.wind_gust_speed_mps = 3.0
+		self.wind_gust_period_s = 6.0
+		self._load_initial_wind_from_yaml()
+
+		# Turbulence dynamic state
+		self.turb_state = np.zeros(3, dtype=float)
+		self.manual_gust_active = False
+		self.manual_gust_start_time = 0.0
+		self.manual_gust_duration_s = 4.0
+		self.manual_gust_peak_mps = 6.0
+		self.last_wind_update_time = time.time()
+		self.current_wind_vector = np.zeros(3, dtype=float)
+
+		# Gazebo Transport Node for Wind
+		self.gz_node = None
+		self.gz_pub_wind = None
+		if GZ_TRANSPORT_AVAILABLE:
+			try:
+				self.gz_node = GzNode()
+				self.gz_pub_wind = self.gz_node.advertise(f"/world/{self.world_name}/wind", GzWind)
+			except Exception as e:
+				print(f"ControlPanel: Gazebo wind transport warning: {e}", flush=True)
+
+		self.wind_timer = QTimer(self)
+		self.wind_timer.setInterval(50)  # 20 Hz
+		self.wind_timer.timeout.connect(self._on_wind_tick)
+		self.wind_timer.start()
 
 		self._init_ui()
 		self._setup_shortcuts()
@@ -953,10 +1007,15 @@ class ControlPanelWindow(QMainWindow):
 		self._init_autotune_ui(tune_tab)
 		self.tabs.addTab(tune_tab, "Auto-Tune")
 
-		# Tab 4: Net launcher (last: _on_tab_changed counts on the tab indices above)
+		# Tab 4: Net launcher
 		net_tab = QWidget()
 		self._init_net_ui(net_tab)
 		self.tabs.addTab(net_tab, "Net")
+
+		# Tab 5: Wind & Turbulence (environmental conditions)
+		wind_tab = QWidget()
+		self._init_wind_ui(wind_tab)
+		self.tabs.addTab(wind_tab, "Wind & Turbulence")
 
 		self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -1320,6 +1379,505 @@ class ControlPanelWindow(QMainWindow):
 		self.net_tel["dist"].setText(f"{net['dist']:.1f} m")
 		self.net_tel["spread"].setText(f"{net['spread']:.2f} m")
 		self.net_tel["speed"].setText(f"{net['speed']:.1f} m/s")
+
+	def _load_initial_wind_from_yaml(self):
+		yaml_path = os.path.abspath(
+			os.path.join(os.path.dirname(__file__), "..", "interceptor.yaml")
+		)
+		if os.path.isfile(yaml_path):
+			try:
+				with open(yaml_path, "r", encoding="utf-8") as f:
+					data = yaml.safe_load(f) or {}
+				w = data.get("wind", {})
+				if w:
+					self.wind_enabled = w.get("enabled", True)
+					self.wind_speed_mps = float(w.get("speed_mps", 0.0))
+					self.wind_direction_deg = float(w.get("direction_deg", 0.0))
+					self.wind_vertical_mps = float(w.get("vertical_mps", 0.0))
+					self.wind_turbulence_pct = float(w.get("turbulence_pct", 0.0))
+					self.wind_gust_speed_mps = float(w.get("gust_speed_mps", 3.0))
+					self.wind_gust_period_s = float(w.get("gust_period_s", 6.0))
+			except Exception:
+				pass
+
+	def _init_wind_ui(self, parent):
+		layout = QVBoxLayout(parent)
+		layout.setContentsMargins(12, 12, 12, 12)
+		layout.setSpacing(10)
+
+		# 1. Master Toggle & Live Status Banner
+		status_group = QGroupBox("Rüzgar Durumu & Canlı Telemetri (Live Wind Monitor)")
+		status_layout = QVBoxLayout(status_group)
+		status_layout.setSpacing(8)
+
+		top_row = QHBoxLayout()
+		self.chk_wind_enable = QCheckBox("Rüzgar Simülasyonu Aktif (Enable Wind)")
+		self.chk_wind_enable.setStyleSheet("font-weight: bold; font-size: 13px;")
+		self.chk_wind_enable.setChecked(self.wind_enabled)
+		self.chk_wind_enable.toggled.connect(self._on_wind_enabled_toggled)
+		top_row.addWidget(self.chk_wind_enable)
+		top_row.addStretch()
+
+		self.lbl_wind_badge = QLabel("0.0 m/s (Sakin)")
+		self.lbl_wind_badge.setStyleSheet(
+			"background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
+		)
+		top_row.addWidget(self.lbl_wind_badge)
+		status_layout.addLayout(top_row)
+
+		grid_telemetry = QGridLayout()
+		grid_telemetry.setHorizontalSpacing(15)
+		grid_telemetry.setVerticalSpacing(4)
+
+		self.lbl_tel_wind_speed = QLabel("0.0 m/s  (0.0 km/h)")
+		self.lbl_tel_wind_dir = QLabel("0°  (Kuzey - N)")
+		self.lbl_tel_wind_vector = QLabel("Vx: 0.0, Vy: 0.0, Vz: 0.0 m/s")
+		self.lbl_tel_wind_gust = QLabel("0.0 m/s  (Sakin)")
+
+		for val in (self.lbl_tel_wind_speed, self.lbl_tel_wind_dir, self.lbl_tel_wind_vector, self.lbl_tel_wind_gust):
+			val.setStyleSheet("font-weight: bold;")
+
+		grid_telemetry.addWidget(QLabel("Toplam Rüzgar:"), 0, 0)
+		grid_telemetry.addWidget(self.lbl_tel_wind_speed, 0, 1)
+		grid_telemetry.addWidget(QLabel("Rüzgar Yönü:"), 0, 2)
+		grid_telemetry.addWidget(self.lbl_tel_wind_dir, 0, 3)
+
+		grid_telemetry.addWidget(QLabel("Vektör (ENU):"), 1, 0)
+		grid_telemetry.addWidget(self.lbl_tel_wind_vector, 1, 1)
+		grid_telemetry.addWidget(QLabel("Anlık Hamle:"), 1, 2)
+		grid_telemetry.addWidget(self.lbl_tel_wind_gust, 1, 3)
+
+		status_layout.addLayout(grid_telemetry)
+		layout.addWidget(status_group)
+
+		# 2. Steady Wind Controls
+		steady_group = QGroupBox("Temel Rüzgar Ayarları (Steady Wind)")
+		steady_layout = QVBoxLayout(steady_group)
+		steady_layout.setSpacing(6)
+
+		# Speed row
+		row_spd = QHBoxLayout()
+		row_spd.addWidget(QLabel("Yatay Rüzgar Hızı (Horizontal Speed):"))
+		self.spin_wind_speed = QDoubleSpinBox()
+		self.spin_wind_speed.setRange(0.0, 30.0)
+		self.spin_wind_speed.setSingleStep(0.5)
+		self.spin_wind_speed.setSuffix(" m/s")
+		self.spin_wind_speed.setValue(self.wind_speed_mps)
+		self.slider_wind_speed = QSlider(Qt.Horizontal)
+		self.slider_wind_speed.setRange(0, 300)
+		self.slider_wind_speed.setValue(int(self.wind_speed_mps * 10))
+
+		self.spin_wind_speed.valueChanged.connect(self._on_wind_speed_spin_changed)
+		self.slider_wind_speed.valueChanged.connect(self._on_wind_speed_slider_changed)
+
+		row_spd.addWidget(self.slider_wind_speed, 1)
+		row_spd.addWidget(self.spin_wind_speed)
+		steady_layout.addLayout(row_spd)
+
+		# Direction row
+		row_dir = QHBoxLayout()
+		row_dir.addWidget(QLabel("Rüzgar Yönü (Direction):"))
+		self.spin_wind_dir = QSpinBox()
+		self.spin_wind_dir.setRange(0, 360)
+		self.spin_wind_dir.setSingleStep(5)
+		self.spin_wind_dir.setSuffix("°")
+		self.spin_wind_dir.setValue(int(self.wind_direction_deg))
+		self.slider_wind_dir = QSlider(Qt.Horizontal)
+		self.slider_wind_dir.setRange(0, 360)
+		self.slider_wind_dir.setValue(int(self.wind_direction_deg))
+
+		self.spin_wind_dir.valueChanged.connect(self._on_wind_dir_spin_changed)
+		self.slider_wind_dir.valueChanged.connect(self._on_wind_dir_slider_changed)
+
+		row_dir.addWidget(self.slider_wind_dir, 1)
+		row_dir.addWidget(self.spin_wind_dir)
+		steady_layout.addLayout(row_dir)
+
+		# Quick Direction Buttons
+		row_dir_btns = QHBoxLayout()
+		row_dir_btns.setSpacing(6)
+		dir_presets = [
+			("Kuzey (0°)", 0),
+			("Doğu (90°)", 90),
+			("Güney (180°)", 180),
+			("Batı (270°)", 270),
+			("Pist Baş Rüzgarı (68°)", 68),
+			("Pist Yan Rüzgarı (158°)", 158),
+		]
+		for name, deg in dir_presets:
+			btn = QPushButton(name)
+			btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+			btn.clicked.connect(lambda _, d=deg: self._set_wind_direction(d))
+			row_dir_btns.addWidget(btn)
+		steady_layout.addLayout(row_dir_btns)
+
+		# Vertical airflow row
+		row_vert = QHBoxLayout()
+		row_vert.addWidget(QLabel("Dikey Hava Akımı (Updraft / Downdraft):"))
+		self.spin_wind_vert = QDoubleSpinBox()
+		self.spin_wind_vert.setRange(-5.0, 5.0)
+		self.spin_wind_vert.setSingleStep(0.2)
+		self.spin_wind_vert.setSuffix(" m/s")
+		self.spin_wind_vert.setValue(self.wind_vertical_mps)
+		self.slider_wind_vert = QSlider(Qt.Horizontal)
+		self.slider_wind_vert.setRange(-50, 50)
+		self.slider_wind_vert.setValue(int(self.wind_vertical_mps * 10))
+
+		self.spin_wind_vert.valueChanged.connect(self._on_wind_vert_spin_changed)
+		self.slider_wind_vert.valueChanged.connect(self._on_wind_vert_slider_changed)
+
+		row_vert.addWidget(self.slider_wind_vert, 1)
+		row_vert.addWidget(self.spin_wind_vert)
+		steady_layout.addLayout(row_vert)
+
+		layout.addWidget(steady_group)
+
+		# 3. Turbulence & Gust Controls
+		turb_group = QGroupBox("Türbülans ve Rüzgar Hamlesi (Turbulence & Gusts)")
+		turb_layout = QVBoxLayout(turb_group)
+		turb_layout.setSpacing(6)
+
+		row_turb = QHBoxLayout()
+		row_turb.addWidget(QLabel("Türbülans Şiddeti (Intensity):"))
+		self.spin_wind_turb = QSpinBox()
+		self.spin_wind_turb.setRange(0, 100)
+		self.spin_wind_turb.setSingleStep(5)
+		self.spin_wind_turb.setSuffix("%")
+		self.spin_wind_turb.setValue(int(self.wind_turbulence_pct))
+		self.slider_wind_turb = QSlider(Qt.Horizontal)
+		self.slider_wind_turb.setRange(0, 100)
+		self.slider_wind_turb.setValue(int(self.wind_turbulence_pct))
+
+		self.spin_wind_turb.valueChanged.connect(self._on_wind_turb_spin_changed)
+		self.slider_wind_turb.valueChanged.connect(self._on_wind_turb_slider_changed)
+
+		row_turb.addWidget(self.slider_wind_turb, 1)
+		row_turb.addWidget(self.spin_wind_turb)
+		turb_layout.addLayout(row_turb)
+
+		# Turbulence preset buttons
+		row_turb_btns = QHBoxLayout()
+		row_turb_btns.setSpacing(6)
+		turb_presets = [
+			("Sakin (%0)", 0),
+			("Hafif (%20)", 20),
+			("Orta (%50)", 50),
+			("Şiddetli (%80)", 80),
+		]
+		for name, pct in turb_presets:
+			btn = QPushButton(name)
+			btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+			btn.clicked.connect(lambda _, p=pct: self._set_wind_turbulence(p))
+			row_turb_btns.addWidget(btn)
+		turb_layout.addLayout(row_turb_btns)
+
+		grid_gust = QGridLayout()
+		grid_gust.addWidget(QLabel("Maksimum Hamle Hızı (Gust Peak):"), 0, 0)
+		self.spin_gust_speed = QDoubleSpinBox()
+		self.spin_gust_speed.setRange(0.0, 15.0)
+		self.spin_gust_speed.setSingleStep(0.5)
+		self.spin_gust_speed.setSuffix(" m/s")
+		self.spin_gust_speed.setValue(self.wind_gust_speed_mps)
+		self.spin_gust_speed.valueChanged.connect(lambda v: setattr(self, "wind_gust_speed_mps", v))
+		grid_gust.addWidget(self.spin_gust_speed, 0, 1)
+
+		grid_gust.addWidget(QLabel("Hamle Periyodu (Gust Period):"), 0, 2)
+		self.spin_gust_period = QDoubleSpinBox()
+		self.spin_gust_period.setRange(1.0, 20.0)
+		self.spin_gust_period.setSingleStep(0.5)
+		self.spin_gust_period.setSuffix(" s")
+		self.spin_gust_period.setValue(self.wind_gust_period_s)
+		self.spin_gust_period.valueChanged.connect(lambda v: setattr(self, "wind_gust_period_s", v))
+		grid_gust.addWidget(self.spin_gust_period, 0, 3)
+
+		turb_layout.addLayout(grid_gust)
+
+		# Trigger Gust Action
+		row_trigger = QHBoxLayout()
+		self.btn_trigger_gust = QPushButton("🌪️ Ani Rüzgar Hamlesi Gönder (Trigger 4s Gust)")
+		self.btn_trigger_gust.setStyleSheet("padding: 6px; font-weight: bold; background-color: #c62828; color: white;")
+		self.btn_trigger_gust.clicked.connect(self._trigger_manual_gust)
+		self.prog_gust = QProgressBar()
+		self.prog_gust.setRange(0, 100)
+		self.prog_gust.setValue(0)
+		self.prog_gust.setVisible(False)
+		self.prog_gust.setFixedHeight(20)
+		row_trigger.addWidget(self.btn_trigger_gust)
+		row_trigger.addWidget(self.prog_gust)
+		turb_layout.addLayout(row_trigger)
+
+		layout.addWidget(turb_group)
+
+		# 4. Weather Presets
+		presets_group = QGroupBox("Hazır Hava Durumu Senaryoları (Weather Presets)")
+		presets_layout = QHBoxLayout(presets_group)
+		presets_layout.setSpacing(8)
+
+		presets = [
+			("🍃 Sakin (Calm)\n0 m/s, %0", 0.0, 0, 0.0, 0, 0.0),
+			("🌾 Hafif Esinti\n4 m/s D, %15", 4.0, 90, 0.0, 15, 2.0),
+			("🌪️ Şiddetli Yan Rüzgar\n10 m/s (158°), %35", 10.0, 158, 0.0, 35, 5.0),
+			("⚡ Fırtınalı & Hamleli\n15 m/s G, %75", 15.0, 180, -1.0, 75, 8.0),
+			("🦅 Termal Yukarı Akım\n4 m/s, +3.5 m/s", 4.0, 68, 3.5, 25, 3.0),
+		]
+		for title, spd, dir_deg, vert, turb, gst in presets:
+			btn = QPushButton(title)
+			btn.setStyleSheet("padding: 8px; font-size: 11px;")
+			btn.clicked.connect(lambda _, s=spd, d=dir_deg, v=vert, t=turb, g=gst: self._apply_weather_preset(s, d, v, t, g))
+			presets_layout.addWidget(btn)
+
+		layout.addWidget(presets_group)
+
+		# 5. Save & Reset actions
+		row_bottom = QHBoxLayout()
+		self.btn_reset_wind = QPushButton("Rüzgarı Sıfırla (Reset Calm)")
+		self.btn_reset_wind.clicked.connect(lambda: self._apply_weather_preset(0.0, 0, 0.0, 0, 0.0))
+		self.btn_save_wind = QPushButton("💾 Varsayılan Olarak interceptor.yaml'a Kaydet")
+		self.btn_save_wind.clicked.connect(self._save_wind_to_yaml)
+		self.lbl_wind_save_status = QLabel("")
+
+		row_bottom.addWidget(self.btn_reset_wind)
+		row_bottom.addWidget(self.btn_save_wind)
+		row_bottom.addWidget(self.lbl_wind_save_status)
+		row_bottom.addStretch()
+
+		layout.addLayout(row_bottom)
+		layout.addStretch()
+
+	def _set_wind_direction(self, deg):
+		self.wind_direction_deg = float(deg)
+		self.spin_wind_dir.blockSignals(True)
+		self.slider_wind_dir.blockSignals(True)
+		self.spin_wind_dir.setValue(int(deg))
+		self.slider_wind_dir.setValue(int(deg))
+		self.spin_wind_dir.blockSignals(False)
+		self.slider_wind_dir.blockSignals(False)
+
+	def _set_wind_turbulence(self, pct):
+		self.wind_turbulence_pct = float(pct)
+		self.spin_wind_turb.blockSignals(True)
+		self.slider_wind_turb.blockSignals(True)
+		self.spin_wind_turb.setValue(int(pct))
+		self.slider_wind_turb.setValue(int(pct))
+		self.spin_wind_turb.blockSignals(False)
+		self.slider_wind_turb.blockSignals(False)
+
+	def _apply_weather_preset(self, spd, dir_deg, vert, turb, gst):
+		self.wind_enabled = True
+		self.chk_wind_enable.setChecked(True)
+		self.wind_speed_mps = float(spd)
+		self.wind_direction_deg = float(dir_deg)
+		self.wind_vertical_mps = float(vert)
+		self.wind_turbulence_pct = float(turb)
+		self.wind_gust_speed_mps = float(gst)
+
+		self.spin_wind_speed.setValue(spd)
+		self.slider_wind_speed.setValue(int(spd * 10))
+		self._set_wind_direction(dir_deg)
+		self.spin_wind_vert.setValue(vert)
+		self.slider_wind_vert.setValue(int(vert * 10))
+		self._set_wind_turbulence(turb)
+		self.spin_gust_speed.setValue(gst)
+
+	def _trigger_manual_gust(self):
+		self.manual_gust_active = True
+		self.manual_gust_start_time = time.time()
+		self.prog_gust.setValue(100)
+		self.prog_gust.setVisible(True)
+		self.btn_trigger_gust.setEnabled(False)
+
+	def _on_wind_enabled_toggled(self, checked):
+		self.wind_enabled = checked
+
+	def _on_wind_speed_spin_changed(self, val):
+		self.wind_speed_mps = val
+		self.slider_wind_speed.blockSignals(True)
+		self.slider_wind_speed.setValue(int(val * 10))
+		self.slider_wind_speed.blockSignals(False)
+
+	def _on_wind_speed_slider_changed(self, val):
+		speed = val / 10.0
+		self.wind_speed_mps = speed
+		self.spin_wind_speed.blockSignals(True)
+		self.spin_wind_speed.setValue(speed)
+		self.spin_wind_speed.blockSignals(False)
+
+	def _on_wind_dir_spin_changed(self, val):
+		self.wind_direction_deg = float(val)
+		self.slider_wind_dir.blockSignals(True)
+		self.slider_wind_dir.setValue(val)
+		self.slider_wind_dir.blockSignals(False)
+
+	def _on_wind_dir_slider_changed(self, val):
+		self.wind_direction_deg = float(val)
+		self.spin_wind_dir.blockSignals(True)
+		self.spin_wind_dir.setValue(val)
+		self.spin_wind_dir.blockSignals(False)
+
+	def _on_wind_vert_spin_changed(self, val):
+		self.wind_vertical_mps = val
+		self.slider_wind_vert.blockSignals(True)
+		self.slider_wind_vert.setValue(int(val * 10))
+		self.slider_wind_vert.blockSignals(False)
+
+	def _on_wind_vert_slider_changed(self, val):
+		vert = val / 10.0
+		self.wind_vertical_mps = vert
+		self.spin_wind_vert.blockSignals(True)
+		self.spin_wind_vert.setValue(vert)
+		self.spin_wind_vert.blockSignals(False)
+
+	def _on_wind_turb_spin_changed(self, val):
+		self.wind_turbulence_pct = float(val)
+		self.slider_wind_turb.blockSignals(True)
+		self.slider_wind_turb.setValue(val)
+		self.slider_wind_turb.blockSignals(False)
+
+	def _on_wind_turb_slider_changed(self, val):
+		self.wind_turbulence_pct = float(val)
+		self.spin_wind_turb.blockSignals(True)
+		self.spin_wind_turb.setValue(val)
+		self.spin_wind_turb.blockSignals(False)
+
+	def _on_wind_tick(self):
+		now = time.time()
+		dt = max(0.001, min(0.2, now - self.last_wind_update_time))
+		self.last_wind_update_time = now
+
+		if not self.wind_enabled:
+			self.current_wind_vector[:] = [0.0, 0.0, 0.0]
+			self._update_wind_live_labels(0.0, 0.0, 0.0, 0.0, 0.0)
+			if self.gz_pub_wind is not None:
+				try:
+					msg = GzWind()
+					msg.enable_wind = False
+					msg.linear_velocity.x = 0.0
+					msg.linear_velocity.y = 0.0
+					msg.linear_velocity.z = 0.0
+					self.gz_pub_wind.publish(msg)
+				except Exception:
+					pass
+			return
+
+		# Base steady wind in ENU (0 deg = North -> blows toward -Y)
+		rad = math.radians(self.wind_direction_deg)
+		base_vx = -self.wind_speed_mps * math.sin(rad)
+		base_vy = -self.wind_speed_mps * math.cos(rad)
+		base_vz = self.wind_vertical_mps
+
+		# Turbulence model
+		turb_intensity = self.wind_turbulence_pct / 100.0
+		gust_mag = 0.0
+
+		if turb_intensity > 0.001:
+			tau = max(0.5, self.wind_gust_period_s / 3.0)
+			alpha = max(0.02, min(0.9, dt / tau))
+			sigma = turb_intensity * (self.wind_gust_speed_mps * 0.5 + self.wind_speed_mps * 0.25)
+			raw_noise = np.random.normal(0.0, max(0.01, sigma), 3)
+			self.turb_state = (1.0 - alpha) * self.turb_state + alpha * raw_noise
+
+			# Periodic gust swell
+			swell = turb_intensity * 0.3 * self.wind_gust_speed_mps * math.sin(2.0 * math.pi * now / max(0.5, self.wind_gust_period_s))
+			self.turb_state[0] += swell * (-math.sin(rad))
+			self.turb_state[1] += swell * (-math.cos(rad))
+			gust_mag = float(np.linalg.norm(self.turb_state))
+		else:
+			self.turb_state[:] = [0.0, 0.0, 0.0]
+
+		# Manual gust pulse
+		manual_gust_v = np.zeros(3)
+		if self.manual_gust_active:
+			elapsed = now - self.manual_gust_start_time
+			if elapsed < self.manual_gust_duration_s:
+				pulse = math.sin(math.pi * elapsed / self.manual_gust_duration_s) ** 2
+				amp = max(self.manual_gust_peak_mps, self.wind_gust_speed_mps)
+				manual_gust_v[0] = -amp * pulse * math.sin(rad)
+				manual_gust_v[1] = -amp * pulse * math.cos(rad)
+				manual_gust_v[2] = 0.3 * amp * pulse
+				gust_mag += amp * pulse
+				if hasattr(self, "prog_gust"):
+					self.prog_gust.setValue(int(100 * (1.0 - elapsed / self.manual_gust_duration_s)))
+			else:
+				self.manual_gust_active = False
+				if hasattr(self, "prog_gust"):
+					self.prog_gust.setValue(0)
+					self.prog_gust.setVisible(False)
+				if hasattr(self, "btn_trigger_gust"):
+					self.btn_trigger_gust.setEnabled(True)
+
+		total_vx = base_vx + self.turb_state[0] + manual_gust_v[0]
+		total_vy = base_vy + self.turb_state[1] + manual_gust_v[1]
+		total_vz = base_vz + self.turb_state[2] + manual_gust_v[2]
+
+		self.current_wind_vector[:] = [total_vx, total_vy, total_vz]
+		total_speed = math.sqrt(total_vx**2 + total_vy**2 + total_vz**2)
+
+		self._update_wind_live_labels(total_speed, total_vx, total_vy, total_vz, gust_mag)
+
+		# Publish to Gazebo
+		if self.gz_pub_wind is not None:
+			try:
+				msg = GzWind()
+				msg.enable_wind = True
+				msg.linear_velocity.x = float(total_vx)
+				msg.linear_velocity.y = float(total_vy)
+				msg.linear_velocity.z = float(total_vz)
+				self.gz_pub_wind.publish(msg)
+			except Exception:
+				pass
+
+	def _update_wind_live_labels(self, speed, vx, vy, vz, gust=0.0):
+		if not hasattr(self, "lbl_tel_wind_speed"):
+			return
+		kmh = speed * 3.6
+		self.lbl_tel_wind_speed.setText(f"{speed:.1f} m/s  ({kmh:.1f} km/h)")
+		compass = get_compass_direction(self.wind_direction_deg)
+		self.lbl_tel_wind_dir.setText(f"{self.wind_direction_deg:.0f}°  ({compass})")
+		self.lbl_tel_wind_vector.setText(f"Vx: {vx:+.1f}, Vy: {vy:+.1f}, Vz: {vz:+.1f} m/s")
+
+		if not self.wind_enabled or speed < 0.2:
+			self.lbl_wind_badge.setText("0.0 m/s (Sakin)")
+			self.lbl_wind_badge.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
+			self.lbl_tel_wind_gust.setText("0.0 m/s (Sakin)")
+		elif speed < 6.0:
+			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Hafif)")
+			self.lbl_wind_badge.setStyleSheet("background-color: #388e3c; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
+			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s")
+		elif speed < 12.0:
+			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Orta/Sert)")
+			self.lbl_wind_badge.setStyleSheet("background-color: #f57c00; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
+			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s (Hamleli)")
+		else:
+			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Fırtınalı)")
+			self.lbl_wind_badge.setStyleSheet("background-color: #d32f2f; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
+			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s (Kuvvetli)")
+
+	def _save_wind_to_yaml(self):
+		yaml_path = os.path.abspath(
+			os.path.join(os.path.dirname(__file__), "..", "interceptor.yaml")
+		)
+		try:
+			data = {}
+			if os.path.isfile(yaml_path):
+				with open(yaml_path, "r", encoding="utf-8") as f:
+					data = yaml.safe_load(f) or {}
+			data["wind"] = {
+				"enabled": bool(self.wind_enabled),
+				"speed_mps": round(float(self.wind_speed_mps), 1),
+				"direction_deg": round(float(self.wind_direction_deg), 1),
+				"vertical_mps": round(float(self.wind_vertical_mps), 1),
+				"turbulence_pct": round(float(self.wind_turbulence_pct), 1),
+				"gust_speed_mps": round(float(self.wind_gust_speed_mps), 1),
+				"gust_period_s": round(float(self.wind_gust_period_s), 1),
+			}
+			with open(yaml_path, "w", encoding="utf-8") as f:
+				yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+			self.lbl_wind_save_status.setText("✅ interceptor.yaml kaydedildi!")
+			self.lbl_wind_save_status.setStyleSheet("color: #2e7d32; font-weight: bold;")
+			QTimer.singleShot(3000, lambda: self.lbl_wind_save_status.setText(""))
+		except Exception as e:
+			self.lbl_wind_save_status.setText(f"❌ Hata: {e}")
+			self.lbl_wind_save_status.setStyleSheet("color: #d32f2f; font-weight: bold;")
 
 	def _init_vision_noise_ui(self, parent_layout):
 		noise_group = QGroupBox("Vision Detector Noise")
@@ -2581,10 +3139,11 @@ def main():
 	parser.add_argument("--port", type=int, default=8000, help="Target sim HTTP port")
 	parser.add_argument("--detector-port", type=int, default=8002, help="Detector HTTP control port")
 	parser.add_argument("--mavlink", default="udpin:0.0.0.0:14550", help="Interceptor PX4 MAVLink link (GCS link, like QGC)")
+	parser.add_argument("--world", default=os.getenv("WORLD", "ankara"), help="Gazebo world name")
 	args = parser.parse_args()
 
 	app = QApplication(sys.argv)
-	win = ControlPanelWindow(host=args.host, port=args.port, mavlink_url=args.mavlink, detector_port=args.detector_port)
+	win = ControlPanelWindow(host=args.host, port=args.port, mavlink_url=args.mavlink, detector_port=args.detector_port, world=args.world)
 	win.show()
 	sys.exit(app.exec())
 

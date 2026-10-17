@@ -4,6 +4,7 @@
   <model name="interceptor">
     <pose>0 0 0.551 0 0 0</pose>
     <link name="base_link">
+      <enable_wind>true</enable_wind>
       <inertial>
         <mass>4.8200</mass>
         <inertia>
