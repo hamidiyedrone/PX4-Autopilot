@@ -172,17 +172,17 @@ def load_intercept_param_metadata():
 				"long": "Minimum commanded forward speed (m/s) maintained during approach guidance."
 			},
 			"INT_TRM_KP_FWD": {
-				"name": "INT_TRM_KP_FWD", "type": "float", "default": 14.0, "min": 0.1, "max": 15.0, "decimal": 2,
+				"name": "INT_TRM_KP_FWD", "type": "float", "default": 4.0, "min": 0.1, "max": 15.0, "decimal": 2,
 				"short": "Terminal standoff distance error velocity gain",
 				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
 			},
 			"INT_TRM_KD_FWD": {
-				"name": "INT_TRM_KD_FWD", "type": "float", "default": 5.0, "min": 0.1, "max": 10.0, "decimal": 2,
+				"name": "INT_TRM_KD_FWD", "type": "float", "default": 1.0, "min": 0.1, "max": 10.0, "decimal": 2,
 				"short": "Terminal relative closing speed damping gain",
 				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
 			},
 			"INT_TRM_FWD_TOL": {
-				"name": "INT_TRM_FWD_TOL", "type": "float", "default": 0.50, "min": 0.05, "max": 1.0, "decimal": 2,
+				"name": "INT_TRM_FWD_TOL", "type": "float", "default": 0.80, "min": 0.05, "max": 2.0, "decimal": 2,
 				"short": "Terminal standoff distance deadband tolerance",
 				"long": "Distance deadband tolerance (+/- meters) around desired standoff in close pursuit to prevent pitch oscillations."
 			},
