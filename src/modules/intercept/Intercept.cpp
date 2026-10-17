@@ -313,12 +313,13 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	_fwd_speed_cmd += _fwd_accel_cmd * dt;
 
 	// Clamp forward speed: minimum speed ensures closing speed never drops below min_closing
-	const float min_approach_speed = _target_pos_valid ? math::max(target_speed + min_closing, 15.0f) : 15.0f;
+	const float min_app_speed = _param_int_app_min_spd.get();
+	const float min_approach_speed = _target_pos_valid ? math::max(target_speed + min_closing, min_app_speed) : min_app_speed;
 	_fwd_speed_cmd = math::constrain(_fwd_speed_cmd, min_approach_speed, max_xy_vel);
 
-	// 3. Aim point placed 30m directly behind target along its flight line
-	constexpr float DIST_BEHIND = 30.f;
-	const matrix::Vector3f aim_point = _target_pos - target_dir * DIST_BEHIND;
+	// 3. Aim point placed behind target along its flight line using INT_APP_DIST_BHD
+	const float dist_behind = _param_int_app_dist_bhd.get();
+	const matrix::Vector3f aim_point = _target_pos - target_dir * dist_behind;
 
 	const matrix::Vector3f to_aim = aim_point - self_pos;
 	const float dist_to_aim = to_aim.norm();
@@ -358,7 +359,9 @@ void Intercept::ComputeApproachGuidance(matrix::Vector3f &vel_cmd, float &yaw_cm
 	const float delta_z = intercept_point(2) - self_pos(2);
 	const float target_vz = _target_vel(2);
 	const float K_z_p = _param_int_app_kp_z.get();
-	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -7.5f, 3.5f);
+	const float max_climb = _param_mpc_z_vel_max_up.get();
+	const float max_descend = _param_mpc_z_vel_max_dn.get();
+	const float vz_desired = math::constrain(target_vz + K_z_p * delta_z, -max_climb, max_descend);
 
 	// Slew-rate limit vertical velocity (max 5.0 m/s^2 acceleration) to rapidly match altitude
 	if (_last_cmd_valid && dt > 0.005f) {
@@ -432,14 +435,14 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	// Target forward speed along line of flight = drone forward speed - closing rate
 	const float raw_target_fwd_speed = current_fwd_speed - _filt_visual_closing_speed;
 	if (!_speed_initialized || _target_speed_est < 5.0f) {
-		_target_speed_est = math::constrain(raw_target_fwd_speed, 18.0f, max_xy_vel);
-		_fwd_speed_cmd = math::constrain(current_fwd_speed, 18.0f, max_xy_vel);
+		_target_speed_est = math::constrain(raw_target_fwd_speed, 10.0f, max_xy_vel);
+		_fwd_speed_cmd = math::constrain(current_fwd_speed, 10.0f, max_xy_vel);
 		_fwd_accel_cmd = 0.0f;
 		_speed_initialized = true;
 	} else if (dt > 0.005f) {
 		constexpr float SPEED_EST_TAU = 0.40f;
 		const float alpha_spd = math::constrain(dt / (SPEED_EST_TAU + dt), 0.02f, 0.30f);
-		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 15.0f, max_xy_vel) - _target_speed_est);
+		_target_speed_est += alpha_spd * (math::constrain(raw_target_fwd_speed, 10.0f, max_xy_vel) - _target_speed_est);
 	}
 
 	// 2. Horizontal Standoff Velocity Control (using horizontal distance d_horiz)
@@ -560,7 +563,9 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	const float kp_z = _param_int_trm_kp_z.get();
-	float vz_desired = math::constrain(delta_z_corr * kp_z, -2.5f, 2.0f);
+	const float max_climb = _param_mpc_z_vel_max_up.get();
+	const float max_descend = _param_mpc_z_vel_max_dn.get();
+	float vz_desired = math::constrain(delta_z_corr * kp_z, -max_climb, max_descend);
 	if (fabsf(delta_z_corr) < FLT_EPSILON) {
 		vz_desired = 0.0f;
 	}
@@ -582,16 +587,16 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	if (los_xy_norm > 0.20f && current_horiz_dist > 0.8f) {
 		const float los_yaw = atan2f(los_ned(1), los_ned(0));
 
-		// Camera horizontal FOV = 80 deg. Optical azimuth error angle:
-		constexpr float HFOV_RAD = math::radians(80.0f);
-		constexpr float OPTICAL_YAW_GAIN = 2.0f * tanf(HFOV_RAD / 2.0f); // ~1.678 rad
+		// Camera horizontal FOV angle using INT_CAM_HFOV:
+		const float hfov_rad = math::radians(_param_int_cam_hfov.get());
+		const float optical_yaw_gain = 2.0f * tanf(hfov_rad / 2.0f);
 
 		// Optical tracking offset outside deadband
 		float visual_yaw_offset = 0.0f;
 		const float yaw_tol = _param_int_trm_yaw_tol.get();
 		if (fabsf(cx - 0.50f) > yaw_tol) {
 			const float offset_yaw = (cx > 0.50f) ? (cx - 0.50f - yaw_tol) : (cx - 0.50f + yaw_tol);
-			visual_yaw_offset = offset_yaw * OPTICAL_YAW_GAIN;
+			visual_yaw_offset = offset_yaw * optical_yaw_gain;
 		}
 
 		// Turn Coordinator: Feed back vehicle roll angle into yaw guidance (active only if INT_TRM_TC_GAIN > 0)
@@ -605,7 +610,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		// Soft deceleration (tapering): smoothly reduce maximum yaw rate as target approaches center
 		// Eliminates overshoot completely by docking gently at the deadband threshold
 		const float center_dist = fabsf(cx - 0.50f);
-		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, 0.35f, 1.0f);
+		const float min_rate_factor = math::constrain(_param_int_trm_yaw_smth.get(), 0.05f, 1.0f);
+		const float rate_factor = math::constrain((center_dist - 0.02f) / 0.10f, min_rate_factor, 1.0f);
 		const float max_close_yaw_rate = math::radians(_param_int_trm_yawrate.get());
 		const float max_dyaw = (max_close_yaw_rate * rate_factor) * dt;
 
@@ -635,7 +641,7 @@ void Intercept::ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, fl
 	}
 
 	// Fly towards target position with continuous speed
-	const float pursuit_speed = math::constrain(_fwd_speed_cmd, 12.0f, _param_mpc_xy_vel_max.get());
+	const float pursuit_speed = math::constrain(_fwd_speed_cmd, 10.0f, _param_mpc_xy_vel_max.get());
 	if (dist_xy > 0.5f) {
 		vel_cmd(0) = (dx / dist_xy) * pursuit_speed;
 		vel_cmd(1) = (dy / dist_xy) * pursuit_speed;
@@ -644,9 +650,11 @@ void Intercept::ComputeVisualReacquisitionGuidance(matrix::Vector3f &vel_cmd, fl
 		vel_cmd(1) = _last_vel_cmd(1);
 	}
 
-	// Altitude: track target altitude
+	// Altitude: track target altitude bounded by MPC_Z_VEL_MAX_UP and MPC_Z_VEL_MAX_DN
 	const float dz = _target_pos(2) - _local_pos.z;
-	vel_cmd(2) = math::constrain(dz * _param_int_trm_kp_z.get(), -2.5f, 2.0f);
+	const float max_climb_reacq = _param_mpc_z_vel_max_up.get();
+	const float max_descend_reacq = _param_mpc_z_vel_max_dn.get();
+	vel_cmd(2) = math::constrain(dz * _param_int_trm_kp_z.get(), -max_climb_reacq, max_descend_reacq);
 }
 
 void Intercept::Run()

@@ -182,10 +182,15 @@ private:
 		(ParamFloat<px4::params::INT_APP_MIN_VEL>) _param_int_app_min_vel,
 		(ParamFloat<px4::params::INT_APP_KP_Z>) _param_int_app_kp_z,
 		(ParamFloat<px4::params::INT_APP_YAWRATE>) _param_int_app_yawrate,
+		(ParamFloat<px4::params::INT_APP_DIST_BHD>) _param_int_app_dist_bhd,
+		(ParamFloat<px4::params::INT_APP_MIN_SPD>) _param_int_app_min_spd,
 		(ParamFloat<px4::params::INT_TRM_KP_FWD>) _param_int_trm_kp_fwd,
 		(ParamFloat<px4::params::INT_TRM_KD_FWD>) _param_int_trm_kd_fwd,
 		(ParamFloat<px4::params::INT_TRM_FWD_TOL>) _param_int_trm_fwd_tol,
 		(ParamFloat<px4::params::INT_TRM_YAW_TOL>) _param_int_trm_yaw_tol,
+		(ParamFloat<px4::params::INT_TRM_YAW_SMTH>) _param_int_trm_yaw_smth,
+		(ParamFloat<px4::params::INT_CAM_HFOV>) _param_int_cam_hfov,
+		(ParamFloat<px4::params::INT_CAM_VFOV>) _param_int_cam_vfov,
 		(ParamFloat<px4::params::INT_TRM_BRK_LAT>) _param_int_trm_brk_lat,
 		(ParamFloat<px4::params::INT_TRM_BRK_TOL>) _param_int_trm_brk_tol,
 		(ParamFloat<px4::params::INT_TRM_KP_Z>) _param_int_trm_kp_z,
@@ -195,6 +200,8 @@ private:
 		(ParamFloat<px4::params::INT_TRM_TC_GAIN>) _param_int_trm_tc_gain,
 		(ParamFloat<px4::params::MPC_ACC_HOR>) _param_mpc_acc_hor,
 		(ParamFloat<px4::params::MPC_ACC_HOR_MAX>) _param_mpc_acc_hor_max,
+		(ParamFloat<px4::params::MPC_Z_VEL_MAX_UP>) _param_mpc_z_vel_max_up,
+		(ParamFloat<px4::params::MPC_Z_VEL_MAX_DN>) _param_mpc_z_vel_max_dn,
 		(ParamFloat<px4::params::MPC_XY_VEL_MAX>) _param_mpc_xy_vel_max
 	)
 };

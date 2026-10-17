@@ -161,6 +161,16 @@ def load_intercept_param_metadata():
 				"short": "Maximum heading slew rate in approach",
 				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
 			},
+			"INT_APP_DIST_BHD": {
+				"name": "INT_APP_DIST_BHD", "type": "float", "default": 30.0, "min": 5.0, "max": 100.0, "decimal": 1,
+				"short": "Approach aim point distance behind target",
+				"long": "Distance in meters behind target used as intermediate aim waypoint during approach phase."
+			},
+			"INT_APP_MIN_SPD": {
+				"name": "INT_APP_MIN_SPD", "type": "float", "default": 15.0, "min": 5.0, "max": 40.0, "decimal": 1,
+				"short": "Approach phase minimum forward speed",
+				"long": "Minimum commanded forward speed (m/s) maintained during approach guidance."
+			},
 			"INT_TRM_KP_FWD": {
 				"name": "INT_TRM_KP_FWD", "type": "float", "default": 14.0, "min": 0.1, "max": 15.0, "decimal": 2,
 				"short": "Terminal standoff distance error velocity gain",
@@ -180,6 +190,21 @@ def load_intercept_param_metadata():
 				"name": "INT_TRM_YAW_TOL", "type": "float", "default": 0.005, "min": 0.005, "max": 0.15, "decimal": 3,
 				"short": "Terminal yaw optical tracking deadband tolerance",
 				"long": "Optical screen error tolerance (+/- from center 0.50) for yaw tracking to suppress chattering and fishtailing."
+			},
+			"INT_TRM_YAW_SMTH": {
+				"name": "INT_TRM_YAW_SMTH", "type": "float", "default": 0.35, "min": 0.05, "max": 1.0, "decimal": 2,
+				"short": "Terminal yaw rate centering smoothing factor",
+				"long": "Minimum yaw rate scale factor [0.05, 1.0] applied when target is near optical boresight center to prevent overshooting."
+			},
+			"INT_CAM_HFOV": {
+				"name": "INT_CAM_HFOV", "type": "float", "default": 80.0, "min": 20.0, "max": 150.0, "decimal": 1,
+				"short": "Camera horizontal field of view",
+				"long": "Horizontal field of view in degrees of the tracking camera mounted on the vehicle."
+			},
+			"INT_CAM_VFOV": {
+				"name": "INT_CAM_VFOV", "type": "float", "default": 60.0, "min": 15.0, "max": 120.0, "decimal": 1,
+				"short": "Camera vertical field of view",
+				"long": "Vertical field of view in degrees of the tracking camera mounted on the vehicle."
 			},
 			"INT_TRM_BRK_LAT": {
 				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 2.0, "min": 0.0, "max": 10.0, "decimal": 1,

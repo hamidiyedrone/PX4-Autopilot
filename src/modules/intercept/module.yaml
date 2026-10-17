@@ -60,6 +60,28 @@ parameters:
             max: 90.0
             decimal: 1
 
+        INT_APP_DIST_BHD:
+            description:
+                short: Approach aim point distance behind target
+                long: Distance in meters behind target used as intermediate aim waypoint during approach phase.
+            type: float
+            default: 30.0
+            min: 5.0
+            max: 100.0
+            unit: m
+            decimal: 1
+
+        INT_APP_MIN_SPD:
+            description:
+                short: Approach phase minimum forward speed
+                long: Minimum commanded forward speed (m/s) maintained during approach guidance.
+            type: float
+            default: 15.0
+            min: 5.0
+            max: 40.0
+            unit: m/s
+            decimal: 1
+
         INT_TRM_KP_FWD:
             description:
                 short: Terminal standoff distance error velocity gain
@@ -99,6 +121,38 @@ parameters:
             min: 0.005
             max: 0.15
             decimal: 3
+
+        INT_TRM_YAW_SMTH:
+            description:
+                short: Terminal yaw rate centering minimum smoothing factor
+                long: Minimum yaw rate scale factor [0.05, 1.0] applied when target is near optical boresight center to prevent overshooting.
+            type: float
+            default: 0.35
+            min: 0.05
+            max: 1.0
+            decimal: 2
+
+        INT_CAM_HFOV:
+            description:
+                short: Camera horizontal field of view
+                long: Horizontal field of view in degrees of the tracking camera mounted on the vehicle.
+            type: float
+            default: 80.0
+            min: 20.0
+            max: 150.0
+            unit: deg
+            decimal: 1
+
+        INT_CAM_VFOV:
+            description:
+                short: Camera vertical field of view
+                long: Vertical field of view in degrees of the tracking camera mounted on the vehicle.
+            type: float
+            default: 60.0
+            min: 15.0
+            max: 120.0
+            unit: deg
+            decimal: 1
 
         INT_TRM_BRK_LAT:
             description:
