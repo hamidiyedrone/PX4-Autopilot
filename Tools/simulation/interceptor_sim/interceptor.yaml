@@ -59,7 +59,7 @@ aero:
   cd_body_side: 0.85    # fuselage in cross flow
   cd_body_axial: 0.30
 
-camera:                 # nose seeker camera, streamed on udp 5600 by plugins/camera_stream
+camera:                 # nose seeker camera (Gazebo transport topic for HUD and sim_detector)
   enabled: true
   width: 720
   height: 590           # 720x590 with 80 deg HFOV yields 69 deg VFOV
