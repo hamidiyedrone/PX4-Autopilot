@@ -1424,7 +1424,7 @@ class ControlPanelWindow(QMainWindow):
 
 		self.lbl_wind_badge = QLabel("0.0 m/s (Sakin)")
 		self.lbl_wind_badge.setStyleSheet(
-			"background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
+			"border: 1px solid #7f8c8d; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		)
 		top_row.addWidget(self.lbl_wind_badge)
 		status_layout.addLayout(top_row)
@@ -1598,8 +1598,8 @@ class ControlPanelWindow(QMainWindow):
 
 		# Trigger Gust Action
 		row_trigger = QHBoxLayout()
-		self.btn_trigger_gust = QPushButton("🌪️ Ani Rüzgar Hamlesi Gönder (Trigger 4s Gust)")
-		self.btn_trigger_gust.setStyleSheet("padding: 6px; font-weight: bold; background-color: #c62828; color: white;")
+		self.btn_trigger_gust = QPushButton("Ani Rüzgar Hamlesi Gönder (Trigger 4s Gust)")
+		self.btn_trigger_gust.setStyleSheet("padding: 6px; font-weight: bold;")
 		self.btn_trigger_gust.clicked.connect(self._trigger_manual_gust)
 		self.prog_gust = QProgressBar()
 		self.prog_gust.setRange(0, 100)
@@ -1618,11 +1618,11 @@ class ControlPanelWindow(QMainWindow):
 		presets_layout.setSpacing(8)
 
 		presets = [
-			("🍃 Sakin (Calm)\n0 m/s, %0", 0.0, 0, 0.0, 0, 0.0),
-			("🌾 Hafif Esinti\n4 m/s D, %15", 4.0, 90, 0.0, 15, 2.0),
-			("🌪️ Şiddetli Yan Rüzgar\n10 m/s (158°), %35", 10.0, 158, 0.0, 35, 5.0),
-			("⚡ Fırtınalı & Hamleli\n15 m/s G, %75", 15.0, 180, -1.0, 75, 8.0),
-			("🦅 Termal Yukarı Akım\n4 m/s, +3.5 m/s", 4.0, 68, 3.5, 25, 3.0),
+			("Sakin (Calm)\n0 m/s, %0", 0.0, 0, 0.0, 0, 0.0),
+			("Hafif Esinti\n4 m/s D, %15", 4.0, 90, 0.0, 15, 2.0),
+			("Şiddetli Yan Rüzgar\n10 m/s (158°), %35", 10.0, 158, 0.0, 35, 5.0),
+			("Fırtınalı & Hamleli\n15 m/s G, %75", 15.0, 180, -1.0, 75, 8.0),
+			("Termal Yukarı Akım\n4 m/s, +3.5 m/s", 4.0, 68, 3.5, 25, 3.0),
 		]
 		for title, spd, dir_deg, vert, turb, gst in presets:
 			btn = QPushButton(title)
@@ -1636,7 +1636,7 @@ class ControlPanelWindow(QMainWindow):
 		row_bottom = QHBoxLayout()
 		self.btn_reset_wind = QPushButton("Rüzgarı Sıfırla (Reset Calm)")
 		self.btn_reset_wind.clicked.connect(lambda: self._apply_weather_preset(0.0, 0, 0.0, 0, 0.0))
-		self.btn_save_wind = QPushButton("💾 Varsayılan Olarak interceptor.yaml'a Kaydet")
+		self.btn_save_wind = QPushButton("Varsayılan Olarak interceptor.yaml'a Kaydet")
 		self.btn_save_wind.clicked.connect(self._save_wind_to_yaml)
 		self.lbl_wind_save_status = QLabel("")
 
@@ -1849,31 +1849,20 @@ class ControlPanelWindow(QMainWindow):
 		self.lbl_tel_wind_vector.setText(f"Vx: {vx:+.1f}, Vy: {vy:+.1f}, Vz: {vz:+.1f} m/s")
 
 		if not self.wind_enabled or speed < 0.2:
-			tier = 0
 			text = "0.0 m/s (Sakin)"
 			gust_text = "0.0 m/s (Sakin)"
-			style = "background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		elif speed < 6.0:
-			tier = 1
 			text = f"{speed:.1f} m/s (Hafif)"
 			gust_text = f"±{gust:.1f} m/s"
-			style = "background-color: #388e3c; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		elif speed < 12.0:
-			tier = 2
 			text = f"{speed:.1f} m/s (Orta/Sert)"
 			gust_text = f"±{gust:.1f} m/s (Hamleli)"
-			style = "background-color: #f57c00; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		else:
-			tier = 3
 			text = f"{speed:.1f} m/s (Fırtınalı)"
 			gust_text = f"±{gust:.1f} m/s (Kuvvetli)"
-			style = "background-color: #d32f2f; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 
 		self.lbl_wind_badge.setText(text)
 		self.lbl_tel_wind_gust.setText(gust_text)
-		if tier != self._last_wind_badge_tier:
-			self.lbl_wind_badge.setStyleSheet(style)
-			self._last_wind_badge_tier = tier
 
 	def _save_wind_to_yaml(self):
 		yaml_path = os.path.abspath(
@@ -1895,12 +1884,12 @@ class ControlPanelWindow(QMainWindow):
 			}
 			with open(yaml_path, "w", encoding="utf-8") as f:
 				yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-			self.lbl_wind_save_status.setText("✅ interceptor.yaml kaydedildi!")
-			self.lbl_wind_save_status.setStyleSheet("color: #2e7d32; font-weight: bold;")
+			self.lbl_wind_save_status.setText("interceptor.yaml kaydedildi.")
+			self.lbl_wind_save_status.setStyleSheet("font-weight: bold;")
 			QTimer.singleShot(3000, lambda: self.lbl_wind_save_status.setText(""))
 		except Exception as e:
-			self.lbl_wind_save_status.setText(f"❌ Hata: {e}")
-			self.lbl_wind_save_status.setStyleSheet("color: #d32f2f; font-weight: bold;")
+			self.lbl_wind_save_status.setText(f"Hata: {e}")
+			self.lbl_wind_save_status.setStyleSheet("font-weight: bold;")
 
 	def _init_vision_noise_ui(self, parent_layout):
 		noise_group = QGroupBox("Vision Detector Noise")
@@ -2232,16 +2221,16 @@ class ControlPanelWindow(QMainWindow):
 		self.spin_trial_dur.setSuffix(" s")
 
 		self.btn_start_tune = QPushButton("Start Auto-Tune")
-		self.btn_start_tune.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white;")
+		self.btn_start_tune.setStyleSheet("font-weight: bold;")
 		self.btn_start_tune.clicked.connect(self._start_autotune)
 
 		self.btn_stop_tune = QPushButton("Stop / Abort")
-		self.btn_stop_tune.setStyleSheet("font-weight: bold; background-color: #c62828; color: white;")
+		self.btn_stop_tune.setStyleSheet("font-weight: bold;")
 		self.btn_stop_tune.setEnabled(False)
 		self.btn_stop_tune.clicked.connect(self._stop_autotune)
 
 		self.btn_apply_best = QPushButton("Apply Best to PX4")
-		self.btn_apply_best.setStyleSheet("font-weight: bold; background-color: #1565c0; color: white;")
+		self.btn_apply_best.setStyleSheet("font-weight: bold;")
 		self.btn_apply_best.setEnabled(False)
 		self.btn_apply_best.clicked.connect(self._apply_best_params)
 
@@ -2751,7 +2740,7 @@ class ControlPanelWindow(QMainWindow):
 				item_rat.setFont(font)
 
 				if is_best:
-					item_rat.setText(f"BEST ★ ({rating_str})")
+					item_rat.setText(f"BEST ({rating_str})")
 					item_rat.setForeground(QColor("#2ecc71"))
 				elif rating_str == "COLLISION RISK" or res["min_dist"] < 1.8:
 					item_rat.setText(rating_str)
