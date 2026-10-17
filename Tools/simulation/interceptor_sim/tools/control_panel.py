@@ -824,6 +824,10 @@ class ControlPanelWindow(QMainWindow):
 		self.manual_gust_peak_mps = 6.0
 		self.last_wind_update_time = time.time()
 		self.current_wind_vector = np.zeros(3, dtype=float)
+		self._last_published_wind = np.array([999.0, 999.0, 999.0])
+		self._last_published_time = 0.0
+		self._last_wind_badge_tier = -1
+		self._wind_was_enabled = None
 
 		# Gazebo Transport Node for Wind
 		self.gz_node = None
@@ -836,7 +840,7 @@ class ControlPanelWindow(QMainWindow):
 				print(f"ControlPanel: Gazebo wind transport warning: {e}", flush=True)
 
 		self.wind_timer = QTimer(self)
-		self.wind_timer.setInterval(50)  # 20 Hz
+		self.wind_timer.setInterval(100)  # 10 Hz (optimized for UI & transport efficiency)
 		self.wind_timer.timeout.connect(self._on_wind_tick)
 		self.wind_timer.start()
 
@@ -1688,6 +1692,8 @@ class ControlPanelWindow(QMainWindow):
 
 	def _on_wind_enabled_toggled(self, checked):
 		self.wind_enabled = checked
+		if not checked:
+			self._wind_was_enabled = None  # Force immediate disable publish
 
 	def _on_wind_speed_spin_changed(self, val):
 		self.wind_speed_mps = val
@@ -1746,18 +1752,22 @@ class ControlPanelWindow(QMainWindow):
 
 		if not self.wind_enabled:
 			self.current_wind_vector[:] = [0.0, 0.0, 0.0]
-			self._update_wind_live_labels(0.0, 0.0, 0.0, 0.0, 0.0)
-			if self.gz_pub_wind is not None:
-				try:
-					msg = GzWind()
-					msg.enable_wind = False
-					msg.linear_velocity.x = 0.0
-					msg.linear_velocity.y = 0.0
-					msg.linear_velocity.z = 0.0
-					self.gz_pub_wind.publish(msg)
-				except Exception:
-					pass
+			if self._wind_was_enabled is not False:
+				self._wind_was_enabled = False
+				self._update_wind_live_labels(0.0, 0.0, 0.0, 0.0, 0.0)
+				if self.gz_pub_wind is not None:
+					try:
+						msg = GzWind()
+						msg.enable_wind = False
+						msg.linear_velocity.x = 0.0
+						msg.linear_velocity.y = 0.0
+						msg.linear_velocity.z = 0.0
+						self.gz_pub_wind.publish(msg)
+					except Exception:
+						pass
 			return
+
+		self._wind_was_enabled = True
 
 		# Base steady wind in ENU (0 deg = North -> blows toward -Y)
 		rad = math.radians(self.wind_direction_deg)
@@ -1814,8 +1824,11 @@ class ControlPanelWindow(QMainWindow):
 
 		self._update_wind_live_labels(total_speed, total_vx, total_vy, total_vz, gust_mag)
 
-		# Publish to Gazebo
-		if self.gz_pub_wind is not None:
+		# Publish to Gazebo only if noticeably changed or periodic keepalive (1.0s)
+		wind_diff = float(np.linalg.norm(self.current_wind_vector - self._last_published_wind))
+		if (wind_diff > 0.05 or (now - self._last_published_time) >= 1.0) and self.gz_pub_wind is not None:
+			self._last_published_wind[:] = self.current_wind_vector
+			self._last_published_time = now
 			try:
 				msg = GzWind()
 				msg.enable_wind = True
@@ -1836,21 +1849,31 @@ class ControlPanelWindow(QMainWindow):
 		self.lbl_tel_wind_vector.setText(f"Vx: {vx:+.1f}, Vy: {vy:+.1f}, Vz: {vz:+.1f} m/s")
 
 		if not self.wind_enabled or speed < 0.2:
-			self.lbl_wind_badge.setText("0.0 m/s (Sakin)")
-			self.lbl_wind_badge.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
-			self.lbl_tel_wind_gust.setText("0.0 m/s (Sakin)")
+			tier = 0
+			text = "0.0 m/s (Sakin)"
+			gust_text = "0.0 m/s (Sakin)"
+			style = "background-color: #2e7d32; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		elif speed < 6.0:
-			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Hafif)")
-			self.lbl_wind_badge.setStyleSheet("background-color: #388e3c; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
-			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s")
+			tier = 1
+			text = f"{speed:.1f} m/s (Hafif)"
+			gust_text = f"±{gust:.1f} m/s"
+			style = "background-color: #388e3c; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		elif speed < 12.0:
-			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Orta/Sert)")
-			self.lbl_wind_badge.setStyleSheet("background-color: #f57c00; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
-			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s (Hamleli)")
+			tier = 2
+			text = f"{speed:.1f} m/s (Orta/Sert)"
+			gust_text = f"±{gust:.1f} m/s (Hamleli)"
+			style = "background-color: #f57c00; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
 		else:
-			self.lbl_wind_badge.setText(f"{speed:.1f} m/s (Fırtınalı)")
-			self.lbl_wind_badge.setStyleSheet("background-color: #d32f2f; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;")
-			self.lbl_tel_wind_gust.setText(f"±{gust:.1f} m/s (Kuvvetli)")
+			tier = 3
+			text = f"{speed:.1f} m/s (Fırtınalı)"
+			gust_text = f"±{gust:.1f} m/s (Kuvvetli)"
+			style = "background-color: #d32f2f; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px; font-size: 13px;"
+
+		self.lbl_wind_badge.setText(text)
+		self.lbl_tel_wind_gust.setText(gust_text)
+		if tier != self._last_wind_badge_tier:
+			self.lbl_wind_badge.setStyleSheet(style)
+			self._last_wind_badge_tier = tier
 
 	def _save_wind_to_yaml(self):
 		yaml_path = os.path.abspath(

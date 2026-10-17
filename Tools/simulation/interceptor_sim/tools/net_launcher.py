@@ -474,7 +474,8 @@ class NetLauncher:
 				with self.lock:
 					self.nets = [n for n in self.nets if n not in expired]
 
-			if t_sim - last_render >= 1.0 / RENDER_RATE or t_sim < last_render:
+			rate = RENDER_RATE if nets else 5.0
+			if t_sim - last_render >= 1.0 / rate or t_sim < last_render:
 				last_render = t_sim
 				markers = [m for n in nets for m in self._draw(n)]
 				with self.lock:

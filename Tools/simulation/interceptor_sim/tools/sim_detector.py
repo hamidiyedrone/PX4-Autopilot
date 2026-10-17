@@ -132,8 +132,24 @@ def read_stl_bounds(path):
     return rec["v"].reshape(-1, 3).astype(np.float64)
 
 
+def decimate_vertices(pts, step=30):
+    """Subsamples dense mesh vertices while retaining extreme hull points for fast projection."""
+    if pts is None or len(pts) <= step:
+        return pts
+    extremes = []
+    for ax in np.eye(3):
+        extremes.append(pts[np.argmin(pts @ ax)])
+        extremes.append(pts[np.argmax(pts @ ax)])
+    for d in [[1,1,0], [1,-1,0], [1,0,1], [1,0,-1], [0,1,1], [0,1,-1], [1,1,1], [1,1,-1], [1,-1,1], [1,-1,-1]]:
+        vec = np.array(d, dtype=float)
+        extremes.append(pts[np.argmin(pts @ vec)])
+        extremes.append(pts[np.argmax(pts @ vec)])
+    sub = np.vstack([pts[::step], np.array(extremes)])
+    return np.unique(np.round(sub, 3), axis=0)
+
+
 def talon_vertices():
-    """All visual vertices of the Talon model, in its body frame."""
+    """All visual vertices of the Talon model, in its body frame (decimated for fast projection)."""
     sdf = open(os.path.join(MODEL_DIR, "model.sdf")).read()
     link_pose = {m.group(1): np.array([float(v) for v in m.group(2).split()[:3]])
                  for m in re.finditer(r'<link name="(\w+)">\s*<pose>([^<]+)</pose>', sdf)}
@@ -143,7 +159,9 @@ def talon_vertices():
         for uri in re.findall(r"<uri>model://talon1718/meshes/([^<]+)</uri>", link.group(2)):
             v = np.unique(np.round(read_stl_bounds(os.path.join(MODEL_DIR, "meshes", uri)), 3), axis=0)
             pts.append(v + offset)
-    return np.concatenate(pts)
+    if pts:
+        return decimate_vertices(np.concatenate(pts), step=30)
+    return np.zeros((0, 3), dtype=np.float64)
 
 
 # ----------------------------------------------------------- HTTP control ---

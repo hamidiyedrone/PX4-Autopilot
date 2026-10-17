@@ -117,11 +117,26 @@ def read_stl_bounds(path):
         return np.zeros((0, 3), dtype=np.float64)
 
 
+def decimate_vertices(pts, step=30):
+    """Subsamples dense mesh vertices while retaining extreme hull points for fast projection."""
+    if pts is None or len(pts) <= step:
+        return pts
+    extremes = []
+    for ax in np.eye(3):
+        extremes.append(pts[np.argmin(pts @ ax)])
+        extremes.append(pts[np.argmax(pts @ ax)])
+    for d in [[1,1,0], [1,-1,0], [1,0,1], [1,0,-1], [0,1,1], [0,1,-1], [1,1,1], [1,1,-1], [1,-1,1], [1,-1,-1]]:
+        vec = np.array(d, dtype=float)
+        extremes.append(pts[np.argmin(pts @ vec)])
+        extremes.append(pts[np.argmax(pts @ vec)])
+    sub = np.vstack([pts[::step], np.array(extremes)])
+    return np.unique(np.round(sub, 3), axis=0)
+
+
 def talon_vertices():
     """Load model vertices from STL meshes or fallback to bounding box corners.
 
-    Only the mesh vertices: the corners of the 3D box lie outside the silhouette and
-    would make the image box about twice as large (same as tools/sim_detector.py)."""
+    Mesh vertices are decimated to ~600 silhouette points for real-time 60 FPS projection."""
     sdf_path = os.path.join(MODEL_DIR, "model.sdf")
     pts = []
     if os.path.exists(sdf_path):
@@ -139,7 +154,9 @@ def talon_vertices():
                             pts.append(v + offset)
         except Exception:
             pass
-    return np.concatenate(pts) if pts else TALON_BBOX_CORNERS
+    if pts:
+        return decimate_vertices(np.concatenate(pts), step=30)
+    return TALON_BBOX_CORNERS
 
 
 # ---------------------------------------------------------------------------------------
@@ -732,12 +749,13 @@ def main():
 
     while True:
         # Process GUI events
-        key = cv2.waitKey(15) & 0xFF
+        key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord('q'):
             break
 
         if key == ord('h'):
             show_flight_data = not show_flight_data
+            state["new_frame"] = True
 
         frame = state["last_frame"]
         if frame is None:
@@ -746,11 +764,22 @@ def main():
             cv2.circle(splash, (width // 2, height // 2), 20, HUD, 1, cv2.LINE_AA)
             hud_text(splash, "NO VIDEO", (width / 2, height / 2 + 60), 0.7, "center")
             cv2.imshow(window_name, splash)
+            cv2.waitKey(30)
             continue
+
+        now = time.time()
+        # Render only when a new camera frame arrives from Gazebo, or fallback to ~5 Hz if paused
+        if not state.get("new_frame", False):
+            if now - state.get("last_draw_time", 0.0) < 0.2:
+                time.sleep(0.002)
+                continue
+
+        state["new_frame"] = False
+        state["last_draw_time"] = now
 
         # draw on a copy: the same frame is shown again until the next one arrives
         frame = frame.copy()
-        if time.time() - state.get("last_frame_time", 0.0) > 1.0:
+        if now - state.get("last_frame_time", 0.0) > 1.0:
             state["fps"] = 0.0
         pi = state["poses"].get(a.interceptor)
         pt = state["poses"].get(a.target)
