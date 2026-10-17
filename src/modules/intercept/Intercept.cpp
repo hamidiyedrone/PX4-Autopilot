@@ -463,40 +463,28 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float max_acc_hor = _param_mpc_acc_hor.get();
 	const float dist_tol = math::max(_param_int_trm_fwd_tol.get(), 0.05f);
 
-	// 1. Continuous desired closing rate:
-	// Tapers smoothly to 0 at the deadband corridor boundary to prevent boundary step jumps.
-	// Inside corridor (|dist_err| <= dist_tol): desired closing speed is 0.
-	// Outside corridor (|dist_err| > dist_tol): commands an approach rate proportional to excess distance.
-	float desired_closing = 0.0f;
-	if (fabsf(dist_err) > dist_tol) {
-		const float excess = (dist_err > 0.0f) ? (dist_err - dist_tol) : (dist_err + dist_tol);
-		desired_closing = math::constrain(0.35f * excess, -2.5f, 4.0f);
-	}
-
-	// Closing rate damping: damps deviation from desired approach rate with full kd_opt strength
-	const float closing_err = _filt_visual_closing_speed - desired_closing;
-	const float vel_damping = math::constrain(-kd_opt * closing_err, -3.5f, 3.5f);
-
-	// 2. Continuous position restoring force towards desired_dist:
-	// - Inside tolerance corridor (|dist_err| <= dist_tol): smooth quadratic taper towards desired_dist.
-	//   Zero slope at standoff center (e=0) suppresses sensor noise jitter,
-	//   while a gentle restoring force prevents the vehicle from drifting and getting trapped at the boundary.
-	// - Outside corridor (|dist_err| > dist_tol): continuous linear transition with matching boundary slope,
-	//   completely eliminating limit-cycle boundary jumps.
-	const float v_tol = kp_opt * 0.05f * dist_tol; // boundary effort (e.g. 0.35 m/s at 0.50m)
+	// Option 1: Pure deadband with zero position feedback inside corridor
+	// - Inside corridor (|dist_err| <= dist_tol): pos_effort is exactly 0. Drone cruises at target speed.
+	// - Outside corridor (|dist_err| > dist_tol): gentle restoring force starts at 0 right at the boundary (no step jump).
 	float pos_effort = 0.0f;
-	if (fabsf(dist_err) <= dist_tol) {
-		const float norm_err = dist_err / dist_tol; // [-1.0, 1.0]
-		pos_effort = v_tol * norm_err * fabsf(norm_err);
-	} else {
-		const float excess = fabsf(dist_err) - dist_tol;
-		const float outside_p = math::constrain(kp_opt * 0.10f * excess, 0.0f, 2.5f);
-		const float sign = (dist_err > 0.0f) ? 1.0f : -1.0f;
-		pos_effort = sign * (v_tol + outside_p);
+	float desired_closing = 0.0f;
+
+	if (dist_err > dist_tol) {
+		const float excess = dist_err - dist_tol;
+		pos_effort = math::min(kp_opt * 0.15f * excess, 3.0f);
+		desired_closing = math::constrain(0.30f * excess, 0.0f, 3.0f);
+	} else if (dist_err < -dist_tol) {
+		const float excess = dist_err + dist_tol;
+		pos_effort = math::max(kp_opt * 0.15f * excess, -3.0f);
+		desired_closing = math::constrain(0.30f * excess, -3.0f, 0.0f);
 	}
 
-	// Combined delta_v with smooth clamping
-	float delta_v = math::constrain(pos_effort + vel_damping, -4.0f, 4.0f);
+	// Velocity damping against closing rate deviations (damps closing rate, smoothly matches target speed)
+	const float closing_err = _filt_visual_closing_speed - desired_closing;
+	const float vel_damping = math::constrain(-kd_opt * 0.40f * closing_err, -2.5f, 2.5f);
+
+	// Combined delta_v
+	float delta_v = math::constrain(pos_effort + vel_damping, -3.5f, 3.5f);
 
 	// Adaptive lateral corner/swerve braking when close (< 5m):
 	// If the target shifts laterally away from boresight center past INT_TRM_BRK_TOL,
