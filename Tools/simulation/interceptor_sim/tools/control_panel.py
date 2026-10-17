@@ -137,7 +137,7 @@ def load_intercept_param_metadata():
 				"long": "Enables the target intercept autonomous flight mode."
 			},
 			"INT_STANDOFF": {
-				"name": "INT_STANDOFF", "type": "float", "default": 5.0, "min": 1.0, "max": 10.0, "decimal": 1,
+				"name": "INT_STANDOFF", "type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "decimal": 1,
 				"short": "Desired terminal standoff distance",
 				"long": "Horizontal distance in meters to maintain behind target during close pursuit."
 			},
@@ -162,32 +162,32 @@ def load_intercept_param_metadata():
 				"long": "Maximum heading change rate (deg/s) in midcourse approach guidance."
 			},
 			"INT_TRM_KP_FWD": {
-				"name": "INT_TRM_KP_FWD", "type": "float", "default": 12.0, "min": 0.1, "max": 15.0, "decimal": 2,
+				"name": "INT_TRM_KP_FWD", "type": "float", "default": 14.0, "min": 0.1, "max": 15.0, "decimal": 2,
 				"short": "Terminal standoff distance error velocity gain",
 				"long": "Proportional speed gain commanding forward pursuit speed offset from horizontal distance error."
 			},
 			"INT_TRM_KD_FWD": {
-				"name": "INT_TRM_KD_FWD", "type": "float", "default": 7.5, "min": 0.1, "max": 10.0, "decimal": 2,
+				"name": "INT_TRM_KD_FWD", "type": "float", "default": 5.0, "min": 0.1, "max": 10.0, "decimal": 2,
 				"short": "Terminal relative closing speed damping gain",
 				"long": "Derivative damping gain on optical relative closing speed (m/s) matching target velocity."
 			},
 			"INT_TRM_FWD_TOL": {
-				"name": "INT_TRM_FWD_TOL", "type": "float", "default": 1.0, "min": 0.05, "max": 1.0, "decimal": 2,
+				"name": "INT_TRM_FWD_TOL", "type": "float", "default": 0.50, "min": 0.05, "max": 1.0, "decimal": 2,
 				"short": "Terminal standoff distance deadband tolerance",
 				"long": "Distance deadband tolerance (+/- meters) around desired standoff in close pursuit to prevent pitch oscillations."
 			},
 			"INT_TRM_YAW_TOL": {
-				"name": "INT_TRM_YAW_TOL", "type": "float", "default": 0.02, "min": 0.005, "max": 0.15, "decimal": 3,
+				"name": "INT_TRM_YAW_TOL", "type": "float", "default": 0.005, "min": 0.005, "max": 0.15, "decimal": 3,
 				"short": "Terminal yaw optical tracking deadband tolerance",
 				"long": "Optical screen error tolerance (+/- from center 0.50) for yaw tracking to suppress chattering and fishtailing."
 			},
 			"INT_TRM_BRK_LAT": {
-				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0, "decimal": 1,
+				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 2.0, "min": 0.0, "max": 10.0, "decimal": 1,
 				"short": "Terminal lateral cornering brake speed reduction",
 				"long": "Maximum forward speed reduction (m/s) when target shifts laterally off-boresight in close pursuit."
 			},
 			"INT_TRM_BRK_TOL": {
-				"name": "INT_TRM_BRK_TOL", "type": "float", "default": 0.20, "min": 0.05, "max": 0.45, "decimal": 2,
+				"name": "INT_TRM_BRK_TOL", "type": "float", "default": 0.25, "min": 0.05, "max": 0.45, "decimal": 2,
 				"short": "Terminal corner braking deadband tolerance",
 				"long": "Lateral screen offset deadband (+/- from center 0.50) before corner braking activates. 0.25 gives corridor [0.25, 0.75]."
 			},
@@ -207,12 +207,12 @@ def load_intercept_param_metadata():
 				"long": "Maximum vertical acceleration (m/s^2) in close pursuit to prevent pitch oscillations."
 			},
 			"INT_TRM_YAWRATE": {
-				"name": "INT_TRM_YAWRATE", "type": "float", "default": 18.0, "min": 5.0, "max": 60.0, "decimal": 1,
+				"name": "INT_TRM_YAWRATE", "type": "float", "default": 24.0, "min": 5.0, "max": 60.0, "decimal": 1,
 				"short": "Terminal maximum heading slew rate",
 				"long": "Maximum heading change rate (deg/s) in terminal close pursuit to eliminate yaw hunting."
 			},
 			"INT_TRM_TC_GAIN": {
-				"name": "INT_TRM_TC_GAIN", "type": "float", "default": 0.0, "min": 0.0, "max": 1.5, "decimal": 2,
+				"name": "INT_TRM_TC_GAIN", "type": "float", "default": 1.0, "min": 0.0, "max": 1.5, "decimal": 2,
 				"short": "Turn coordinator roll feedback gain",
 				"long": "Feeds back roll angle into yaw guidance to assist bank-to-turn entry and actively drive steady-state roll back to zero."
 			},
@@ -261,7 +261,7 @@ def load_intercept_param_metadata():
 				"short": "Turret control mode (0=Manual, 1=Auto-Aim)", "long": "Turret auto-aim (gimbal + offset)."
 			},
 			"INT_TRT_OFFSET": {
-				"name": "INT_TRT_OFFSET", "type": "float", "default": 0.0, "min": -45.0, "max": 45.0, "decimal": 1,
+				"name": "INT_TRT_OFFSET", "type": "float", "default": -2.0, "min": -45.0, "max": 45.0, "decimal": 1,
 				"short": "Turret gimbal offset (+/- deg)", "long": "Angular offset added directly to gimbal pitch for turret aim."
 			},
 			"INT_AUTO_FIRE": {

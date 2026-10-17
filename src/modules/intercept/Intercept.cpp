@@ -458,26 +458,30 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float desired_dist = math::constrain(_param_int_standoff.get(), 1.0f, 10.0f);
 	const float dist_err = current_horiz_dist - desired_dist; // positive = too far behind, negative = too close
 
-	// Desired closing speed tapers smoothly to 0 at standoff distance
+	// Continuous, smooth distance tracking targeting desired_dist directly:
+	// 1. Desired closing rate tapers smoothly to 0 at desired_dist (no offset shift)
 	const float desired_closing = math::constrain(0.40f * dist_err, -3.0f, 5.0f);
 
-	// Closing speed error: difference between actual closing rate and desired closing rate
+	// 2. Closing rate damping error: difference between actual closing rate and desired closing rate
 	const float closing_err = _filt_visual_closing_speed - desired_closing;
 
 	const float kp_opt = _param_int_trm_kp_fwd.get();
 	const float kd_opt = _param_int_trm_kd_fwd.get();
 	const float max_acc_hor = _param_mpc_acc_hor.get();
+	const float dist_tol = math::max(_param_int_trm_fwd_tol.get(), 0.05f);
 
-	const float dist_tol = _param_int_trm_fwd_tol.get();
-	float delta_v = 0.0f;
-
-	if (fabsf(dist_err) > dist_tol) {
-		const float dist_err_corr = (dist_err > 0.0f) ? (dist_err - dist_tol) : (dist_err + dist_tol);
-		delta_v = -kd_opt * closing_err + math::constrain(kp_opt * 0.15f * dist_err_corr, -3.0f, 3.0f);
-	} else {
-		// Inside corridor: gently damp any residual closing velocity
-		delta_v = -kd_opt * 0.5f * _filt_visual_closing_speed;
+	// 3. Smooth deadband scaling:
+	// Inside the tolerance corridor around desired_dist, position effort scales smoothly to zero.
+	// This prevents pitch chatter when settled at standoff, while eliminating limit cycle jumps at the boundary.
+	float deadband_scale = 1.0f;
+	if (fabsf(dist_err) < dist_tol) {
+		deadband_scale = fabsf(dist_err) / dist_tol;
 	}
+
+	// 4. Combined continuous delta_v:
+	// Position restoring force pulls continuously to desired_dist (scaled smoothly inside deadband),
+	// while closing speed damping prevents overshoot and oscillation.
+	float delta_v = -kd_opt * 0.40f * closing_err + math::constrain(kp_opt * 0.15f * dist_err * deadband_scale, -3.0f, 3.0f);
 
 	// Clamp commanded velocity delta to prevent abrupt pitch swings
 	delta_v = math::constrain(delta_v, -4.0f, 4.0f);
@@ -510,8 +514,8 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	const float desired_fwd_speed = math::constrain((_target_speed_est + delta_v) * overhead_factor - corner_brake, 10.0f, max_xy_vel);
 
 	// Slew-rate limit forward speed command in close pursuit
-	constexpr float MAX_CLOSE_ACCEL = 2.0f;
-	constexpr float MAX_CLOSE_DECEL = 3.5f;
+	constexpr float MAX_CLOSE_ACCEL = 3.5f;
+	constexpr float MAX_CLOSE_DECEL = 4.0f;
 	const float prev_speed_cmd = _fwd_speed_cmd;
 	if (_last_cmd_valid && dt > 0.005f) {
 		const float max_dv_acc = MAX_CLOSE_ACCEL * dt;
