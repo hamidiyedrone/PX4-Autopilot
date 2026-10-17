@@ -166,6 +166,7 @@ private:
 	float _last_visual_dist{-1.f};
 	float _filt_visual_closing_speed{0.f};
 	float _target_speed_est{25.f};
+	float _lat_integral{0.f};
 
 	// Approach guidance closing rate state
 	float _last_approach_dist{-1.f};
@@ -186,6 +187,7 @@ private:
 		(ParamFloat<px4::params::INT_TRM_KD_FWD>) _param_int_trm_kd_fwd,
 		(ParamFloat<px4::params::INT_TRM_FWD_TOL>) _param_int_trm_fwd_tol,
 		(ParamFloat<px4::params::INT_TRM_KP_LAT>) _param_int_trm_kp_lat,
+		(ParamFloat<px4::params::INT_TRM_KI_LAT>) _param_int_trm_ki_lat,
 		(ParamFloat<px4::params::INT_TRM_LAT_TOL>) _param_int_trm_lat_tol,
 		(ParamFloat<px4::params::INT_TRM_LAT_MAX>) _param_int_trm_lat_max,
 		(ParamFloat<px4::params::INT_TRM_BRK_LAT>) _param_int_trm_brk_lat,

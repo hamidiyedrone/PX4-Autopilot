@@ -174,19 +174,24 @@ def load_intercept_param_metadata():
 				"long": "Distance deadband tolerance (+/- meters) around desired standoff in close pursuit to prevent pitch oscillations."
 			},
 			"INT_TRM_KP_LAT": {
-				"name": "INT_TRM_KP_LAT", "type": "float", "default": 0.2, "min": 0.1, "max": 5.0, "decimal": 2,
-				"short": "Terminal lateral position proportional gain",
-				"long": "Proportional gain (m/s per meter lateral offset) for centering target horizontally."
+				"name": "INT_TRM_KP_LAT", "type": "float", "default": 3.0, "min": 0.1, "max": 10.0, "decimal": 2,
+				"short": "Terminal lateral visual tracking proportional gain",
+				"long": "Proportional gain (m/s per unit screen error) for centering target horizontally."
+			},
+			"INT_TRM_KI_LAT": {
+				"name": "INT_TRM_KI_LAT", "type": "float", "default": 0.8, "min": 0.0, "max": 5.0, "decimal": 2,
+				"short": "Terminal lateral visual tracking integral gain",
+				"long": "Integral gain (m/s per unit-s screen error) for rejecting steady crosswind drift."
 			},
 			"INT_TRM_LAT_TOL": {
-				"name": "INT_TRM_LAT_TOL", "type": "float", "default": 0.05, "min": 0.01, "max": 0.20, "decimal": 2,
+				"name": "INT_TRM_LAT_TOL", "type": "float", "default": 0.02, "min": 0.005, "max": 0.15, "decimal": 3,
 				"short": "Terminal lateral optical deadband tolerance",
 				"long": "Normalized deadband tolerance on target horizontal optical error [-1.0, 1.0]."
 			},
 			"INT_TRM_LAT_MAX": {
-				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "decimal": 1,
+				"name": "INT_TRM_LAT_MAX", "type": "float", "default": 4.0, "min": 0.0, "max": 10.0, "decimal": 1,
 				"short": "Terminal maximum lateral strafe speed",
-				"long": "Maximum lateral velocity correction (m/s) to maintain coordinated flight without excessive banking."
+				"long": "Maximum lateral velocity correction (m/s) to counteract crosswind and center on target."
 			},
 			"INT_TRM_BRK_LAT": {
 				"name": "INT_TRM_BRK_LAT", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0, "decimal": 1,

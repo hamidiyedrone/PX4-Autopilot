@@ -96,15 +96,10 @@ void PayloadController::computeTurretPitch(float dt, float target_dist)
 	const float min_pitch = _param_int_trt_min_p.get();
 	const float max_pitch = _param_int_trt_max_p.get();
 
-	// Takip toleransı koridoru: INT_STANDOFF (örn. 5m) + INT_TRM_FWD_TOL (örn. 1m) -> [standoff - tol, standoff + tol]
-	const float standoff = _param_int_standoff.get();
-	const float fwd_tol = _param_int_trm_fwd_tol.get();
-	const float max_tracking_dist = standoff + fwd_tol;
-	const float min_tracking_dist = math::max(standoff - fwd_tol, 1.5f);
+	// Broad aiming range (up to 20m) for continuous target tracking in terminal pursuit
+	const bool in_aiming_range = (target_dist > 1.0f && target_dist <= 20.0f);
 
-	const bool in_tracking_corridor = (target_dist >= min_tracking_dist && target_dist <= max_tracking_dist);
-
-	if (_param_int_trt_mode.get() == 1 && in_tracking_corridor) {
+	if (_param_int_trt_mode.get() == 1 && in_aiming_range) {
 		// Taret açısı = Gimbal açısı + Gimbal Ofset
 		const float desired_pitch = _gimbal_pitch_deg + _param_int_trt_offset.get();
 

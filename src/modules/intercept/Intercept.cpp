@@ -207,6 +207,7 @@ void Intercept::ResetGuidanceState()
 	_last_visual_dist = -1.f;
 	_filt_visual_closing_speed = 0.f;
 	_target_speed_est = 25.f;
+	_lat_integral = 0.f;
 	_payload_controller.reset();
 }
 
@@ -524,8 +525,7 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 	}
 
 	// 3. 3D Velocity Command
-	// Pure Coordinated Flight: forward velocity flows strictly along Line-of-Sight.
-	// Lateral strafe is completely disabled (vel_lat_corr = 0.0) when INT_TRM_LAT_MAX = 0.0 to eliminate high-speed side-slips and banking.
+	// Lateral strafe controller: corrects crosswind drift and target lateral offset
 	const float max_lat_vel = _param_int_trm_lat_max.get();
 	const float lat_tol = _param_int_trm_lat_tol.get();
 	float vel_lat_corr = 0.0f;
@@ -535,8 +535,17 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		if (fabsf(offset_x) > lat_tol) {
 			lat_err = (offset_x > 0.0f) ? (offset_x - lat_tol) : (offset_x + lat_tol);
 		}
+
+		// Anti-windup integration on lateral screen offset (rejects steady crosswind drift)
+		if (dt > 0.005f) {
+			_lat_integral = math::constrain(_lat_integral + offset_x * dt, -3.0f, 3.0f);
+		}
+
 		const float kp_lat = _param_int_trm_kp_lat.get();
-		vel_lat_corr = math::constrain(lat_err * kp_lat, -max_lat_vel, max_lat_vel);
+		const float ki_lat = _param_int_trm_ki_lat.get();
+		vel_lat_corr = math::constrain(lat_err * kp_lat + _lat_integral * ki_lat, -max_lat_vel, max_lat_vel);
+	} else {
+		_lat_integral = 0.0f;
 	}
 
 	// Unit horizontal vector perpendicular to LOS in XY plane (pointing right)
@@ -605,10 +614,14 @@ void Intercept::ComputeClosePursuitGuidance(matrix::Vector3f &vel_cmd, float &ya
 		}
 
 		// Turn Coordinator: Feed back vehicle roll angle into yaw guidance.
-		// Dynamically assists coordinated banking entry in turns, while actively steering heading
-		// to extinguish cross-track body velocity and drive steady-state roll back to zero.
-		const matrix::Eulerf euler(matrix::Quatf(_vehicle_attitude.q));
-		const float roll_coord = euler.phi() * _param_int_trm_tc_gain.get();
+		// When lateral strafe is active (max_lat_vel > 0.001f), heading is strictly
+		// dedicated to pointing the nose (camera & turret) at the target, so steady-state roll
+		// from crosswind does not drag the turret away from the target.
+		float roll_coord = 0.0f;
+		if (max_lat_vel <= 0.001f) {
+			const matrix::Eulerf euler(matrix::Quatf(_vehicle_attitude.q));
+			roll_coord = euler.phi() * _param_int_trm_tc_gain.get();
+		}
 
 		desired_yaw = matrix::wrap_pi(los_yaw + visual_yaw_offset + roll_coord);
 	}
